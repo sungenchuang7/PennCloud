@@ -26,6 +26,8 @@ volatile pthread_t client_threads[100] = {};
 volatile bool shutting_down = false;
 int listenfd;
 
+std::string STATICS_LOC = "./statics/";
+
 struct ConnectionInfo
 {
   int comm_fd;
@@ -105,6 +107,7 @@ bool is_req_init_line(std::string command, ReqInitLine *req_init_line)
   return true;
 }
 
+// Check if the line is a header, if so adds it to the headers map and returns true, else returns false.
 bool is_header(std::string command, std::unordered_map<std::string, std::string> *headers)
 {
   if (command.find(": ") == std::string::npos)
@@ -118,7 +121,7 @@ bool is_header(std::string command, std::unordered_map<std::string, std::string>
 std::tuple<std::string, std::string, std::string> get_index(ReqInitLine *req_init_line)
 {
   // Read in HTML file
-  std::ifstream file("index.html");
+  std::ifstream file(STATICS_LOC + "index.html");
   std::string message_body;
 
   if (file.is_open())
@@ -231,80 +234,19 @@ void *connection_thread(void *args)
     }
 
     // Check for inital line of request
-
     if (is_req_init_line(command, req_init_line))
     {
-      // // GET
-      // if (req_init_line->method == "GET")
-      // {
-      //   // Get the resource from req_init_line->path
-      //   // TODO: Move to a get function
-      //   // TODO: Cannot handle binary files atm not sure if we need to
-      //   std::ifstream file(req_init_line->path);
-      //   std::string resource;
-      //   if (file.is_open())
-      //   {
-      //     std::string line;
-      //     while (getline(file, line))
-      //     {
-      //       resource += line + "\n";
-      //     }
-      //     file.close();
-      //   }
-      //   else
-      //   {
-      //     std::string response = req_init_line->version + " 404 Not Found\r\n";
-      //     write(fd, response.c_str(), response.length());
-      //     if (debug_output)
-      //     {
-      //       std::cerr << "[" << thread_no << "] S: "
-      //                 << response;
-      //     }
-      //     continue;
-      //   }
-
-      //   // Status Line
-      //   std::string response = req_init_line->version + " 200 OK\r\n";
-
-      //   // Headers
-      //   // TODO: may need Date:, Content-Type:
-      //   response += "Content-Length: " + std::to_string(resource.length()) + "\r\n"; // Length of message after transfer encodings applied
-      //   response += "/r/n";
-
-      //   // Message Body
-      //   response += resource;
-
-      //   write(fd, response.c_str(), response.length());
-      //   if (debug_output)
-      //   {
-      //     std::cerr << "[" << thread_no << "] S: "
-      //               << response;
-      //   }
-      // }
-      // // POST
-      // else if (req_init_line->method == "POST")
-      // {
-      //   std::string response = req_init_line->version + " 501 Not Implemented\r\n";
-      //   write(fd, response.c_str(), response.length());
-      //   if (debug_output)
-      //   {
-      //     std::cerr << "[" << thread_no << "] S: "
-      //               << response;
-      //   }
-      // }
-      // // HEAD
-      // else if (req_init_line->method == "HEAD")
-      // {
-      // }
+      req_init_line_read = true;
     }
     // Check for headers
     else if (is_header(command, &headers))
     {
+
     }
     // Check for end of headers
     else if (command == "")
     {
-
+      end_of_headers_read = true;
       // Read message body using content-length header
       if (headers.find("Content-Length") != headers.end())
       {
@@ -361,6 +303,12 @@ void *connection_thread(void *args)
                     << response;
         }
       }
+
+      // Reset variables
+      req_init_line_read = false;
+      end_of_headers_read = false;
+      reading_message_body = false;
+      message_body_buf = "";
     }
     else
     {
