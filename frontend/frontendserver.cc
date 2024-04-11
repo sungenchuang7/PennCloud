@@ -17,6 +17,7 @@
 #include <sstream>
 #include <string>
 #include <map>
+#include <iomanip>
 
 int port = 8080;
 bool debug_output = false;
@@ -39,6 +40,7 @@ struct ReqInitLine
   std::string version;
   ReqInitLine(std::string method, std::string uri, std::string version) : method(method), path(path), version(version) {}
 };
+
 
 void siginthandler(int sig)
 {
@@ -105,21 +107,63 @@ bool is_req_init_line(std::string command, ReqInitLine *req_init_line)
 
 bool is_header(std::string command, std::unordered_map<std::string, std::string> *headers)
 {
-  std::vector<std::string> values;
-  std::stringstream ss(command);
-  std::string value;
-  while (std::getline(ss, value, ':'))
-  {
-    values.push_back(value);
-  }
-
-  if (values.size() != 2)
+  if (command.find(": ") == std::string::npos)
   {
     return false;
   }
-  headers->insert({values[0], values[1]});
+  headers->insert(std::make_pair(command.substr(0, command.find(": ")), command.substr(command.find(": ") + 2)));
   return true;
 }
+
+std::tuple<std::string, std::string, std::string> get_index(ReqInitLine *req_init_line)
+{
+  // Read in HTML file
+  std::ifstream file("index.html");
+  std::string message_body;
+
+  if (file.is_open())
+  {
+    std::string line;
+    while (getline(file, line))
+    {
+      message_body += line + "\n";
+    }
+    file.close();
+  }
+  else
+  {
+    std::string response = req_init_line->version + " 404 Not Found\r\n";
+    return std::make_tuple(response, "", "");
+  }
+
+  // Create inital response line
+  std::string init_response = req_init_line->version + " 200 OK\r\n";
+
+  // Create headers
+  std::string headers;
+  // TODO: Date header
+
+  // Content Type header
+  headers += "Content-Type: text/html\r\n";
+
+  // Content Length header
+  headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
+
+  // Return response
+  return std::make_tuple(init_response, headers, message_body);
+}
+
+void send_response(int fd, int thread_no, std::string init_response, std::string headers, std::string message_body)
+{
+  std::string response = init_response + headers + "\r\n" + message_body;
+  write(fd, response.c_str(), response.length());
+  if (debug_output)
+  {
+    std::cerr << "[" << thread_no << "] S: "
+              << response;
+  }
+}
+// TODO: If there is time, place all routes in a map and call the appropriate function
 
 void *connection_thread(void *args)
 {
@@ -190,68 +234,68 @@ void *connection_thread(void *args)
 
     if (is_req_init_line(command, req_init_line))
     {
-      // GET
-      if (req_init_line->method == "GET")
-      {
-        // Get the resource from req_init_line->path
-        // TODO: Move to a get function
-        // TODO: Cannot handle binary files atm not sure if we need to
-        std::ifstream file(req_init_line->path);
-        std::string resource;
-        if (file.is_open())
-        {
-          std::string line;
-          while (getline(file, line))
-          {
-            resource += line + "\n";
-          }
-          file.close();
-        }
-        else
-        {
-          std::string response = req_init_line->version + " 404 Not Found\r\n";
-          write(fd, response.c_str(), response.length());
-          if (debug_output)
-          {
-            std::cerr << "[" << thread_no << "] S: "
-                      << response;
-          }
-          continue;
-        }
+      // // GET
+      // if (req_init_line->method == "GET")
+      // {
+      //   // Get the resource from req_init_line->path
+      //   // TODO: Move to a get function
+      //   // TODO: Cannot handle binary files atm not sure if we need to
+      //   std::ifstream file(req_init_line->path);
+      //   std::string resource;
+      //   if (file.is_open())
+      //   {
+      //     std::string line;
+      //     while (getline(file, line))
+      //     {
+      //       resource += line + "\n";
+      //     }
+      //     file.close();
+      //   }
+      //   else
+      //   {
+      //     std::string response = req_init_line->version + " 404 Not Found\r\n";
+      //     write(fd, response.c_str(), response.length());
+      //     if (debug_output)
+      //     {
+      //       std::cerr << "[" << thread_no << "] S: "
+      //                 << response;
+      //     }
+      //     continue;
+      //   }
 
-        // Status Line
-        std::string response = req_init_line->version + " 200 OK\r\n";
+      //   // Status Line
+      //   std::string response = req_init_line->version + " 200 OK\r\n";
 
-        // Headers
-        // TODO: may need Date:, Content-Type:
-        response += "Content-Length: " + std::to_string(resource.length()) + "\r\n"; // Length of message after transfer encodings applied
-        response += "/r/n";
+      //   // Headers
+      //   // TODO: may need Date:, Content-Type:
+      //   response += "Content-Length: " + std::to_string(resource.length()) + "\r\n"; // Length of message after transfer encodings applied
+      //   response += "/r/n";
 
-        // Message Body
-        response += resource;
+      //   // Message Body
+      //   response += resource;
 
-        write(fd, response.c_str(), response.length());
-        if (debug_output)
-        {
-          std::cerr << "[" << thread_no << "] S: "
-                    << response;
-        }
-      }
-      // POST
-      else if (req_init_line->method == "POST")
-      {
-        std::string response = req_init_line->version + " 501 Not Implemented\r\n";
-        write(fd, response.c_str(), response.length());
-        if (debug_output)
-        {
-          std::cerr << "[" << thread_no << "] S: "
-                    << response;
-        }
-      }
-      // HEAD
-      else if (req_init_line->method == "HEAD")
-      {
-      }
+      //   write(fd, response.c_str(), response.length());
+      //   if (debug_output)
+      //   {
+      //     std::cerr << "[" << thread_no << "] S: "
+      //               << response;
+      //   }
+      // }
+      // // POST
+      // else if (req_init_line->method == "POST")
+      // {
+      //   std::string response = req_init_line->version + " 501 Not Implemented\r\n";
+      //   write(fd, response.c_str(), response.length());
+      //   if (debug_output)
+      //   {
+      //     std::cerr << "[" << thread_no << "] S: "
+      //               << response;
+      //   }
+      // }
+      // // HEAD
+      // else if (req_init_line->method == "HEAD")
+      // {
+      // }
     }
     // Check for headers
     else if (is_header(command, &headers))
@@ -280,6 +324,22 @@ void *connection_thread(void *args)
       // Construct and send response
       if (req_init_line->method == "GET")
       {
+        if (req_init_line->path == "/")
+        {
+          std::tuple<std::string, std::string, std::string> response = get_index(req_init_line);
+          send_response(fd, thread_no, std::get<0>(response), std::get<1>(response), std::get<2>(response));
+        }
+        else
+        {
+          // TODO: Add headers
+          std::string response = req_init_line->version + " 404 Not Found\r\n";
+          write(fd, response.c_str(), response.length());
+          if (debug_output)
+          {
+            std::cerr << "[" << thread_no << "] S: "
+                      << response;
+          }
+        }
       }
       else if (req_init_line->method == "POST")
       {
