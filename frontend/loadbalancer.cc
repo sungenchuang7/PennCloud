@@ -168,6 +168,8 @@ int main(int argc, char *argv[])
       // redirect user to min_clients, min_server 
       fprintf(stderr, "min server is: %s with %d clients \n", min_server.c_str(), min_clients);
       server_clients[min_server]++;
+      std::string msg = "HTTP/1.1 301 Moved Permanently\nLocation: https://www.google.com/";
+      write(comm_fd, msg.c_str(), strlen(msg.c_str()));
     }
   }
 }
