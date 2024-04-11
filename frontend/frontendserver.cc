@@ -18,6 +18,7 @@
 #include <string>
 #include <map>
 #include <iomanip>
+#include "routes.h"
 
 int port = 8080;
 bool debug_output = false;
@@ -26,23 +27,12 @@ volatile pthread_t client_threads[100] = {};
 volatile bool shutting_down = false;
 int listenfd;
 
-std::string STATICS_LOC = "./statics/";
-
 struct ConnectionInfo
 {
   int comm_fd;
   int thread_no;
   ConnectionInfo(int comm_fd, int thread_no) : comm_fd(comm_fd), thread_no(thread_no) {}
 };
-
-struct ReqInitLine
-{
-  std::string method;
-  std::string path;
-  std::string version;
-  ReqInitLine(std::string method, std::string uri, std::string version) : method(method), path(path), version(version) {}
-};
-
 
 void siginthandler(int sig)
 {
@@ -118,44 +108,6 @@ bool is_header(std::string command, std::unordered_map<std::string, std::string>
   return true;
 }
 
-std::tuple<std::string, std::string, std::string> get_index(ReqInitLine *req_init_line)
-{
-  // Read in HTML file
-  std::ifstream file(STATICS_LOC + "index.html");
-  std::string message_body;
-
-  if (file.is_open())
-  {
-    std::string line;
-    while (getline(file, line))
-    {
-      message_body += line + "\n";
-    }
-    file.close();
-  }
-  else
-  {
-    std::string response = req_init_line->version + " 404 Not Found\r\n";
-    return std::make_tuple(response, "", "");
-  }
-
-  // Create inital response line
-  std::string init_response = req_init_line->version + " 200 OK\r\n";
-
-  // Create headers
-  std::string headers;
-  // TODO: Date header
-
-  // Content Type header
-  headers += "Content-Type: text/html\r\n";
-
-  // Content Length header
-  headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
-
-  // Return response
-  return std::make_tuple(init_response, headers, message_body);
-}
-
 void send_response(int fd, int thread_no, std::string init_response, std::string headers, std::string message_body)
 {
   std::string response = init_response + headers + "\r\n" + message_body;
@@ -166,7 +118,6 @@ void send_response(int fd, int thread_no, std::string init_response, std::string
               << response;
   }
 }
-// TODO: If there is time, place all routes in a map and call the appropriate function
 
 void *connection_thread(void *args)
 {
@@ -241,7 +192,6 @@ void *connection_thread(void *args)
     // Check for headers
     else if (is_header(command, &headers))
     {
-
     }
     // Check for end of headers
     else if (command == "")
@@ -269,6 +219,16 @@ void *connection_thread(void *args)
         if (req_init_line->path == "/")
         {
           std::tuple<std::string, std::string, std::string> response = get_index(req_init_line);
+          send_response(fd, thread_no, std::get<0>(response), std::get<1>(response), std::get<2>(response));
+        }
+        else if (req_init_line->path == "/signup")
+        {
+          std::tuple<std::string, std::string, std::string> response = get_signup(req_init_line);
+          send_response(fd, thread_no, std::get<0>(response), std::get<1>(response), std::get<2>(response));
+        }
+        else if (req_init_line->path == "/home")
+        {
+          std::tuple<std::string, std::string, std::string> response = get_home(req_init_line);
           send_response(fd, thread_no, std::get<0>(response), std::get<1>(response), std::get<2>(response));
         }
         else
