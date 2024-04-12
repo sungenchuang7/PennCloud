@@ -228,7 +228,7 @@ void *connection_thread(void *args)
         }
         else if (req_init_line->path == "/home")
         {
-          std::tuple<std::string, std::string, std::string> response = get_home(req_init_line);
+          std::tuple<std::string, std::string, std::string> response = get_home(req_init_line, headers);
           send_response(fd, thread_no, std::get<0>(response), std::get<1>(response), std::get<2>(response));
         }
         else

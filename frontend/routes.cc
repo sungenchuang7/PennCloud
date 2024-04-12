@@ -104,9 +104,18 @@ std::tuple<std::string, std::string, std::string> get_signup(ReqInitLine *req_in
   return std::make_tuple(init_response, headers, message_body);
 }
 
-std::tuple<std::string, std::string, std::string> get_home(ReqInitLine *req_init_line)
+std::tuple<std::string, std::string, std::string> get_home(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers)
 {
-  // TODO: Add check for if logged in
+  // Check if user is logged in (has auth_token cookie)
+  if (req_headers.find("Cookie") == req_headers.end() || req_headers["Cookie"].find("auth_token") == std::string::npos)
+  {
+    std::string init_response = req_init_line->version + " 401 Unauthorized\r\n";
+    std::string message_body = "You must be logged in to view this page.";
+    std::string headers = "";
+    headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
+    return std::make_tuple(init_response, headers, message_body);
+  }
+
   // Read in HTML file
   std::ifstream file(STATICS_LOC + "home.html");
   std::string message_body;
@@ -192,7 +201,8 @@ std::tuple<std::string, std::string, std::string> post_login(ReqInitLine *req_in
     std::string headers = "";
     headers += "Location: /home\r\n";
     headers += "Content-Length: 0\r\n"; // Need this header on all post responses
-    // TODO: Set cookie/auth token
+    // TODO: Add auth token as a cookie, change token value
+    headers += "Set-Cookie: auth_token=true; Max-Age=3600; Path=/\r\n";
     return std::make_tuple(init_response, headers, message_body);
   }
 }
