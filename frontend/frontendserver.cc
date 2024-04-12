@@ -115,7 +115,7 @@ void send_response(int fd, int thread_no, std::string init_response, std::string
   if (debug_output)
   {
     std::cerr << "[" << thread_no << "] S: "
-              << response;
+              << response << std::endl;
   }
 }
 
@@ -233,35 +233,52 @@ void *connection_thread(void *args)
         }
         else
         {
-          // TODO: Add headers
-          std::string response = req_init_line->version + " 404 Not Found\r\n";
-          write(fd, response.c_str(), response.length());
-          if (debug_output)
-          {
-            std::cerr << "[" << thread_no << "] S: "
-                      << response;
-          }
+          std::string message_body = "404 Not Found";
+          std::string init_response_line = req_init_line->version + " 404 Not Found\r\n";
+          std::string headers = "";
+          headers += "Content-Type: text/plain\r\n";
+          headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
+          send_response(fd, thread_no, init_response_line, headers, message_body);
         }
       }
       else if (req_init_line->method == "POST")
       {
-        std::string response = req_init_line->version + " 501 Not Implemented\r\n";
-        write(fd, response.c_str(), response.length());
         if (debug_output)
         {
-          std::cerr << "[" << thread_no << "] S: "
-                    << response;
+          std::cerr << "[" << thread_no << "] Message body: " << message_body_buf << std::endl;
+        }
+        if (req_init_line->path == "/login")
+        {
+          std::tuple<std::string, std::string, std::string> response = post_login(req_init_line, message_body_buf);
+          send_response(fd, thread_no, std::get<0>(response), std::get<1>(response), std::get<2>(response));
+        }
+        else
+        {
+          std::string message_body = "404 Not Found";
+          std::string init_response_line = req_init_line->version + " 404 Not Found\r\n";
+          std::string headers = "";
+          headers += "Content-Type: text/plain\r\n";
+          headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
+          send_response(fd, thread_no, init_response_line, headers, message_body);
         }
       }
       else if (req_init_line->method == "HEAD")
       {
-        std::string response = req_init_line->version + " 501 Not Implemented\r\n";
-        write(fd, response.c_str(), response.length());
-        if (debug_output)
-        {
-          std::cerr << "[" << thread_no << "] S: "
-                    << response;
-        }
+        std::string message_body = "501 Not Implemented";
+        std::string init_response_line = req_init_line->version + " 501 Not Implemented\r\n";
+        std::string headers = "";
+        headers += "Content-Type: text/plain\r\n";
+        headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
+        send_response(fd, thread_no, init_response_line, headers, message_body);
+      }
+      else
+      {
+        std::string message_body = "501 Not Implemented";
+        std::string init_response_line = req_init_line->version + " 501 Not Implemented\r\n";
+        std::string headers = "";
+        headers += "Content-Type: text/plain\r\n";
+        headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
+        send_response(fd, thread_no, init_response_line, headers, message_body);
       }
 
       // Reset variables
@@ -269,6 +286,7 @@ void *connection_thread(void *args)
       end_of_headers_read = false;
       reading_message_body = false;
       message_body_buf = "";
+      headers.clear();
     }
     else
     {

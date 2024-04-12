@@ -11,8 +11,12 @@ struct ReqInitLine
   ReqInitLine(std::string method, std::string uri, std::string version) : method(method), path(path), version(version) {}
 };
 
+// GET ROUTES
 std::tuple<std::string, std::string, std::string> get_index(ReqInitLine *req_init_line);
 std::tuple<std::string, std::string, std::string> get_signup(ReqInitLine *req_init_line);
 std::tuple<std::string, std::string, std::string> get_home(ReqInitLine *req_init_line);
+
+// POST ROUTES
+std::tuple<std::string, std::string, std::string> post_login(ReqInitLine *req_init_line, std::string body);
 
 #endif
