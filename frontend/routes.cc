@@ -19,14 +19,16 @@
 #include <string>
 #include <map>
 #include <iomanip>
+#include <uuid/uuid.h>
 
 std::string STATICS_LOC = "./statics/";
 
 
 // TODO: Can combine these static file rendering functions
 // TODO: Put routes in map:function pairs
+
 // GET ROUTES
-std::tuple<std::string, std::string, std::string> get_index(ReqInitLine *req_init_line)
+std::tuple<std::string, std::string, std::string> get_index(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers)
 {
   // TODO: Add check for if logged out
   // Read in HTML file
@@ -60,6 +62,16 @@ std::tuple<std::string, std::string, std::string> get_index(ReqInitLine *req_ini
 
   // Content Length header
   headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
+
+  // Check if user has a cookie, if not generate a random one
+  if (req_headers.find("Cookie") == req_headers.end() || req_headers["Cookie"].find("sid") == std::string::npos)
+  {
+    uuid_t uuid;
+    uuid_generate(uuid);
+    char uuid_str[37];
+    uuid_unparse(uuid, uuid_str);
+    headers += "Set-Cookie: sid=" + std::string(uuid_str) + "; Path=/\r\n";
+  }
 
   // Return response
   return std::make_tuple(init_response, headers, message_body);

@@ -13,7 +13,7 @@ struct ReqInitLine
 };
 
 // GET ROUTES
-std::tuple<std::string, std::string, std::string> get_index(ReqInitLine *req_init_line);
+std::tuple<std::string, std::string, std::string> get_index(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers);
 std::tuple<std::string, std::string, std::string> get_signup(ReqInitLine *req_init_line);
 std::tuple<std::string, std::string, std::string> get_home(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> headers);
 
