@@ -32,9 +32,9 @@ void *frontendThread(void *arg) {
 int main(int argc, char *argv[])
 {
   // push some stuff onto server_clients to test
-  server_clients["first"] = 0;
-  server_clients["second"] = 0;
-  server_clients["third"] = 0;
+  server_clients["www.google.com"] = 0;
+  server_clients["www.youtube.com"] = 0;
+  server_clients["www.yahoo.com"] = 0;
 
   int c; // var for getopt
   bool vflag = false;
@@ -166,10 +166,14 @@ int main(int argc, char *argv[])
         }
       }
       // redirect user to min_clients, min_server 
-      fprintf(stderr, "min server is: %s with %d clients \n", min_server.c_str(), min_clients);
+      std::string init_response = "HTTP/1.0 301 Moved Permanently\r\nLocation: http://";
+      std::string response = init_response + min_server + "\r\n\r\n301 Moved Permanently";
+      write(comm_fd, response.c_str(), strlen(response.c_str()));
+      if (vflag) {
+        fprintf(stderr, "min server is: %s with %d clients \n", min_server.c_str(), min_clients);
+        fprintf(stderr, "responding with: %s\n", response.c_str());
+      }
       server_clients[min_server]++;
-      std::string msg = "HTTP/1.1 301 Moved Permanently\nLocation: https://www.google.com/";
-      write(comm_fd, msg.c_str(), strlen(msg.c_str()));
     }
   }
 }
