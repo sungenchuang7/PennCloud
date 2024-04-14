@@ -1,6 +1,6 @@
 #include "backendserver.h"
 
-bool pFlag = false, vFlag = false;  // Command line argument flags.
+bool pFlag = false, vFlag = false, rFlag = false;  // Command line argument flags.
 int portNumber = 10000;
 int myIndex;  // Stores the index of this node within the addresses list.
 
@@ -34,8 +34,8 @@ bool shutDownCleanup = false;  // Signals when thread resources have been cleane
 
 pthread_mutex_t threadUpdatesLock;  // Lock for accessing availableThreadIndices and closedConnections.
 
-// Main entry point for this program. See echoserver.h for function documentation.
-// @returns  Exit code 0 for success, else error.
+// Main entry point for this program. See backendserver.h for function documentation.
+// @returns Exit code 0 for success, else error.
 int main(int argc, char *argv[]) {
     // Parse arguments and set flags.
     parseArgs(argc, argv);
@@ -62,7 +62,7 @@ int parseArgs(int argc, char *argv[]) {
     }
 
     // Check for specified options.
-    while ((optValue = getopt(argc, argv, "p:vi:")) != -1) {
+    while ((optValue = getopt(argc, argv, "p:vi:r")) != -1) {
         if (optValue == 'p') {
             // Port option enabled.
             pFlag = true;
@@ -75,6 +75,9 @@ int parseArgs(int argc, char *argv[]) {
             // Set node index identifier.
             std::string newIndex = optarg;
             myIndex = std::stoi(newIndex);
+        }  else if (optValue == 'r') {
+            // Recovery option enabled.
+            rFlag = true;
         }
     }
 
@@ -442,7 +445,7 @@ void* workerThread(void* connectionInfo) {
                                     (buf[3] == 'a' || buf[3] == 'A') &&
                                     (buf[4] == '\r') &&
                                     (buf[5] == '\n')) {
-                                // DATA called, break loop and enter email parsing mode.
+                                // DATA called, break loop and enter value parsing mode.
                                 if (requestedCommand == "PUT" || requestedCommand == "CPUT") {
                                     // Data call accepted.
                                     dataCalled = true;
