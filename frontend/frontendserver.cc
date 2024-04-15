@@ -231,6 +231,16 @@ void *connection_thread(void *args)
           std::tuple<std::string, std::string, std::string> response = get_home(req_init_line, headers);
           send_response(fd, thread_no, std::get<0>(response), std::get<1>(response), std::get<2>(response));
         }
+        else if (req_init_line->path == "/inbox")
+        {
+          std::tuple<std::string, std::string, std::string> response = get_inbox(req_init_line, headers);
+          send_response(fd, thread_no, std::get<0>(response), std::get<1>(response), std::get<2>(response));
+        }
+        else if (req_init_line->path.find("/inbox/") != std::string::npos)
+        {
+          std::tuple<std::string, std::string, std::string> response = get_inbox_message(req_init_line, headers);
+          send_response(fd, thread_no, std::get<0>(response), std::get<1>(response), std::get<2>(response));
+        }
         else
         {
           std::string message_body = "404 Not Found";
@@ -249,7 +259,17 @@ void *connection_thread(void *args)
         }
         if (req_init_line->path == "/login")
         {
-          std::tuple<std::string, std::string, std::string> response = post_login(req_init_line, message_body_buf);
+          std::tuple<std::string, std::string, std::string> response = post_login(req_init_line, headers, message_body_buf);
+          send_response(fd, thread_no, std::get<0>(response), std::get<1>(response), std::get<2>(response));
+        }
+        else if (req_init_line->path == "/send")
+        {
+          std::tuple<std::string, std::string, std::string> response = post_send_message(req_init_line, headers, message_body_buf);
+          send_response(fd, thread_no, std::get<0>(response), std::get<1>(response), std::get<2>(response));
+        }
+        else if (req_init_line->path == "/delete-email")
+        {
+          std::tuple<std::string, std::string, std::string> response = post_delete_message(req_init_line, headers, message_body_buf);
           send_response(fd, thread_no, std::get<0>(response), std::get<1>(response), std::get<2>(response));
         }
         else
