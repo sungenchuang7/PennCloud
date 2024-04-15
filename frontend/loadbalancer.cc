@@ -18,12 +18,46 @@
 
 // create a global map mapping server address/port to num active clients
 static std::map<std::string, int> server_clients; 
+static bool vflag = false;
 
-void *frontendThread(void *arg) {
-  //start by blocking all SIGINT signals in the threads
-  int comm_fd = *(int *) arg;
+struct ConnectionInfo
+{
+  int comm_fd;
+  std::string server_address;
+  ConnectionInfo(int comm_fd, std::string server_address) : comm_fd(comm_fd), server_address(server_address) {}
+};
 
-  // TODO: heartbeat check
+void *frontendThread(void *args) {
+  int comm_fd = ((ConnectionInfo *)args)->comm_fd;
+  std::string addr = ((ConnectionInfo *)args)->server_address;
+  int total_chars = 0;
+  while(true) {
+    //read 100 bytes into a read buffer
+    char* read_buffer = (char*) malloc(100);
+    bzero(read_buffer, 100);
+    int num_read = read(comm_fd, read_buffer, 100);
+    if (num_read < 0) {
+      fprintf(stderr, "read failed!\n");
+      exit(1);
+    }
+    if (num_read == 0) {
+      // this means the client has closed the connection or died
+      // remove client from server_clients for now 
+      server_clients.erase(addr);
+
+      free(read_buffer);
+      close(comm_fd);
+      if (vflag) {
+        fprintf(stderr, "[%d] Connection closed\n", comm_fd);
+      }
+      pthread_exit(NULL);
+    }
+    // don't really care what this message is as long as it exists, so just erase read_buffer
+    if (vflag){
+      fprintf(stderr, "Message received: %s\n", read_buffer);
+    }
+    bzero(read_buffer, 100);
+  }
 
   pthread_exit(NULL);
 }
@@ -37,21 +71,15 @@ int main(int argc, char *argv[])
   server_clients["www.yahoo.com"] = 0;
 
   int c; // var for getopt
-  bool vflag = false;
-  int p = 5000; // default port is 5000
-	while ((c = getopt (argc, argv, "vp:")) != -1)
+  int p = 5000; // default port for frontend servers to connect to is 5000
+	while ((c = getopt (argc, argv, "v")) != -1)
 		switch (c)
 		{
 			case 'v':
 				vflag = true;
 				break;
-      case 'p':
-        p = atoi(optarg);
-        break;
 			case '?':
-        if (optopt == 'p')
-					fprintf(stderr, "Option -%c requires an argument. \n", optopt);
-        else if (isprint (optopt))
+        if (isprint (optopt))
 					fprintf(stderr, "Unknown option '-%c'.\n", optopt);
 				else
 					fprintf(stderr, "Unknown option character '\\x%x',\n", optopt);
@@ -108,7 +136,7 @@ int main(int argc, char *argv[])
 
   u_servaddr.sin_family = AF_INET;
   u_servaddr.sin_addr.s_addr = htons(INADDR_ANY);
-  u_servaddr.sin_port = htons(8000);
+  u_servaddr.sin_port = htons(8000); // default port for user socket is 8000
 
   int u_opt = 1;
   ret = setsockopt(u_sockfd, SOL_SOCKET, SO_REUSEADDR|SO_REUSEPORT, &u_opt, sizeof(u_opt));
@@ -142,7 +170,8 @@ int main(int argc, char *argv[])
 
       // create new thread for this specific frontend server connection 
       pthread_t temp_thread;
-      if (pthread_create(&temp_thread, NULL, frontendThread, &comm_fd) != 0) {
+      ConnectionInfo *connection_info = new ConnectionInfo(comm_fd, server_port);
+      if (pthread_create(&temp_thread, NULL, frontendThread, connection_info) != 0) {
           fprintf(stderr, "pthread_create error");
           return -1;
       }

@@ -24,6 +24,7 @@ int port = 8080;
 bool debug_output = false;
 volatile int fds[100] = {}; // File descriptors of clients
 volatile pthread_t client_threads[100] = {};
+volatile pthread_t hb_thread;
 volatile bool shutting_down = false;
 int listenfd;
 
@@ -117,6 +118,37 @@ void send_response(int fd, int thread_no, std::string init_response, std::string
     std::cerr << "[" << thread_no << "] S: "
               << response << std::endl;
   }
+}
+
+void *heartbeat_thread(void *args)
+{
+  bool sig_int = false; 
+  int comm_fd = *(int*) args;
+
+  if (shutting_down)
+  {
+    if (debug_output)
+    {
+      std::cerr << "heartbeat thread closed" << std::endl;
+    }
+    pthread_detach(hb_thread);
+    pthread_exit(NULL);
+  }
+
+  while (!sig_int)
+  {
+    sleep(3); // sleep for 3 seconds 
+    char alive_msg[] = "+OK server alive!\r\n";
+    write(comm_fd, alive_msg, strlen(alive_msg));
+  }
+  // Close thread
+  if (debug_output)
+  {
+    std::cerr << "heartbeat thread closed" << std::endl;
+  }
+  close(comm_fd);
+  pthread_detach(hb_thread);
+  pthread_exit(NULL);
 }
 
 void *connection_thread(void *args)
@@ -361,6 +393,35 @@ int main(int argc, char *argv[])
     std::cerr << "Cannot create signal" << std::endl;
     siginthandler(-1);
     exit(EXIT_FAILURE);
+  }
+
+  // Create a socket to connect to load balancer
+  int lbfd = socket(PF_INET, SOCK_STREAM, 0);
+  if (lbfd < 0)
+  {
+    std::cerr << "Cannot create socket" << std::endl;
+    siginthandler(-1);
+    exit(EXIT_FAILURE);
+  }
+  
+  // Connect to load balancer
+  struct sockaddr_in lbservaddr;
+  bzero(&lbservaddr, sizeof(lbservaddr));
+  lbservaddr.sin_family = AF_INET;
+  lbservaddr.sin_port = htons(5000);
+  std::string lbip = "127.0.0.1"; // TODO: Change to config file later
+  inet_pton(AF_INET, lbip.c_str(), &(lbservaddr.sin_addr));
+  connect(lbfd, (struct sockaddr*)&lbservaddr, sizeof(lbservaddr));
+
+  // create heartbeat thread
+  if (!shutting_down) {
+    pthread_t hb_thread_info;
+    if (pthread_create(&hb_thread_info, NULL, heartbeat_thread, &lbfd) < 0) {
+      std::cerr << "Error in creating thread" << std::endl;
+      siginthandler(-1);
+      exit(EXIT_FAILURE);
+    }
+    hb_thread = hb_thread_info;
   }
 
   // Create a server socket and bind it to the listener
