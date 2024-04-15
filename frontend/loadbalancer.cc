@@ -18,6 +18,8 @@
 
 // create a global map mapping server address/port to num active clients
 static std::map<std::string, int> server_clients; 
+// also create a global map mapping connected servers to the port that they're hosting for clients 
+static std::map<std::string, std::string> real_server_address;
 static bool vflag = false;
 
 struct ConnectionInfo
@@ -31,9 +33,13 @@ void *frontendThread(void *args) {
   int comm_fd = ((ConnectionInfo *)args)->comm_fd;
   std::string addr = ((ConnectionInfo *)args)->server_address;
   int total_chars = 0;
+  char* buffer = (char*) malloc(1000);
+  bzero(buffer, 1000);
+  bool received_first_message = false;
+  char* read_buffer = (char*) malloc(100);
+
   while(true) {
     //read 100 bytes into a read buffer
-    char* read_buffer = (char*) malloc(100);
     bzero(read_buffer, 100);
     int num_read = read(comm_fd, read_buffer, 100);
     if (num_read < 0) {
@@ -52,11 +58,32 @@ void *frontendThread(void *args) {
       }
       pthread_exit(NULL);
     }
-    // don't really care what this message is as long as it exists, so just erase read_buffer
     if (vflag){
       fprintf(stderr, "Message received: %s\n", read_buffer);
     }
-    bzero(read_buffer, 100);
+    if (!received_first_message) {
+      // if we've already received the address, we don't care about the message so can just move on 
+      // if we haven't we need to store the message
+      for (int i = 0; i < 100; i++) {
+        buffer[total_chars + i] = read_buffer[i];
+      }
+      total_chars = total_chars + num_read;
+
+      // iterate through buffer to check for /r/n
+      int i = 0;
+      while (!received_first_message && buffer[i] != '\0') {
+        if (buffer[i] == '\r' && buffer[i + 1] == '\n') {
+          // this means we've found the end of the first message; should be address port information
+          std::string temp = buffer; 
+          std::string final_addr = temp.substr(0, i);
+          real_server_address[addr] = final_addr;
+          received_first_message = true;
+          free(buffer);
+          break;
+        }
+        i++;
+      }
+    }
   }
 
   pthread_exit(NULL);
@@ -65,11 +92,6 @@ void *frontendThread(void *args) {
 // takes in -p command specifying which port the server should be hosted on for frontend servers to connect to
 int main(int argc, char *argv[])
 {
-  // push some stuff onto server_clients to test
-  server_clients["www.google.com"] = 0;
-  server_clients["www.youtube.com"] = 0;
-  server_clients["www.yahoo.com"] = 0;
-
   int c; // var for getopt
   int p = 5000; // default port for frontend servers to connect to is 5000
 	while ((c = getopt (argc, argv, "v")) != -1)
@@ -196,10 +218,10 @@ int main(int argc, char *argv[])
       }
       // redirect user to min_clients, min_server 
       std::string init_response = "HTTP/1.0 301 Moved Permanently\r\nLocation: http://";
-      std::string response = init_response + min_server + "\r\n\r\n301 Moved Permanently";
+      std::string response = init_response + real_server_address[min_server] + "\r\n\r\n301 Moved Permanently";
       write(comm_fd, response.c_str(), strlen(response.c_str()));
       if (vflag) {
-        fprintf(stderr, "min server is: %s with %d clients \n", min_server.c_str(), min_clients);
+        fprintf(stderr, "min server is: %s with %d clients. real server address is %s \n", min_server.c_str(), min_clients, real_server_address[min_server].c_str());
         fprintf(stderr, "responding with: %s\n", response.c_str());
       }
       server_clients[min_server]++;

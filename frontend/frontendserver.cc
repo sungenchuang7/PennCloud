@@ -124,6 +124,9 @@ void *heartbeat_thread(void *args)
 {
   bool sig_int = false; 
   int comm_fd = *(int*) args;
+  // first message has to tell the address information for clients to connect to
+  std::string addr = "127.0.0.1:" + std::to_string(port) + "\r\n"; // TODO: change to look at debug later
+  write(comm_fd, addr.c_str(), strlen(addr.c_str()));
 
   if (shutting_down)
   {
@@ -138,7 +141,7 @@ void *heartbeat_thread(void *args)
   while (!sig_int)
   {
     sleep(3); // sleep for 3 seconds 
-    char alive_msg[] = "+OK server alive!\r\n";
+    char alive_msg[] = "+OK server alive!";
     write(comm_fd, alive_msg, strlen(alive_msg));
   }
   // Close thread
