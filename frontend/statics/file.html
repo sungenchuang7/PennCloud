@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Penn Cloud</title>
+</head>
+<body>
+    <div class="file-container">
+        <!-- Insert file name here using c++ code-->
+        <h2>File name</h2>
+        <button id="delete-btn">Delete</button>
+        <button id="download-btn">Download</button>
+    </div>
+
+    <script>
+        document.getElementById('delete-btn').addEventListener('click', function() {
+            const currentURL = window.location.href;
+            const lastIndex = currentURL.lastIndexOf('/');
+            const stringAfterLastSlash = currentURL.substring(lastIndex + 1);
+            const bodyData = "file_id=" + stringAfterLastSlash + "&";
+            const options = {
+                method: 'POST',
+                headers: {
+                'Content-Type': 'text/plain'
+                },
+                body: bodyData
+            };
+
+            fetch('/delete-file', options)
+                .then(response => {
+                if (!response.ok) {
+                    throw new Error('Response was not ok');
+                }
+                return response;
+                })
+                .then(data => {
+                console.log('POST request successful', data);
+                // Handle the response data here
+                })
+                .catch(error => {
+                console.error('There was a problem with the POST request:', error);
+                // Handle errors here
+                });
+        });
+
+        document.getElementById('download-btn').addEventListener('click', function() {
+            // TODO: Implement reply
+            alert('Downloading file...');
+        });
+    </script>
+</body>
+</html>
