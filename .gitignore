@@ -1,4 +1,0 @@
-*.o
-frontendserver
-loadbalancer
-.vscode
