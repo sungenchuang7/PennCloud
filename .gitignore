@@ -1,0 +1,5 @@
+*.o
+frontendserver
+loadbalancer
+.vscode
+*.dSYM

@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Penn Cloud</title>
+</head>
+
+<body>
+    <h1>Inbox</h1>
+    <a href="/home">Back to Home</a>
+    <br><br>
+    <!-- form to write a new email -->
+    <h3>New Message</h3>
+    <form action="/send" method="post">
+        <label for="recipient">Recipient:</label>
+        <input type="text" id="recipient" name="recipient" required>
+        <br><br>
+        <label for="subject">Subject:</label>
+        <input type="text" id="subject" name="subject" required>
+        <br><br>
+        <label for="message">Message:</label>
+        <textarea id="message" name="message" required></textarea>
+        <br><br>
+        <input type="submit" value="Send">
+    <br><br>
+    <h3>Your Messages</h3>
+    <ul id="emailList">
+        <!-- email html elements here -->
+    </ul>
+
+    <script>
+
+        // const emails list will be added here with c++ code
+        // EXAMPLE:
+        // const emails = [
+        //     { message_id: "abcd", subject: "Subject 1", sender: "user1@localhost", arrivalTime: "Sat Apr 13 00:00:00 2024" },
+        //     { message_id: "defg", subject: "Subject 2", sender: "user2@localhost", arrivalTime: "Sun Apr 14 00:00:00 2024" },
+        //     { message_id: "hijk", subject: "Subject 3", sender: "user3@localhost", arrivalTime: "Sun Apr 15 00:00:00 2024" }
+        // ];
+
+        function displayEmails() {
+            const emailListElement = document.getElementById('emailList');
+            emails.forEach(email => {
+                const listItem = document.createElement('li');
+                listItem.innerHTML = `
+                    <a href="/inbox/${email.message_id}">
+                        <strong>${email.subject}</strong><br>
+                    </a>
+                        From: ${email.sender}<br>
+                        Arrival Time: ${email.arrival_time}
+                `;
+                emailListElement.appendChild(listItem);
+            });
+        }
+
+        window.onload = displayEmails;
+    </script>
+</body>
+
+</html>

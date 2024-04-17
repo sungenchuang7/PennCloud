@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Penn Cloud</title>
+</head>
+
+<body>
+    <!--add conditional to change "Inbox" to whatever directory we are currently in-->
+    <h1>Inbox</h1>
+    <a href="/home">Back to Home</a>
+    <br><br>
+    <!-- form to upload a new file -->
+    <h3>Upload</h3>
+    <form action="/upload" method="post">
+        <label for="file">File: </label>
+        <input type="file" id="file" name="filename" required>
+        <br><br>
+        <input type="submit" value="Upload">
+    <br><br>
+    <h3>New Folder</h3>
+    <form action="/new_folder" method="post">
+      <label for="name">Folder Name: </label>
+      <input type="text" id="name" name="name">
+      <br><br>
+      <input type="submit" value="Create New Folder">
+    </form>
+    <br><br>
+    <h3>Your Files</h3>
+    <ul id="fileList">
+        <!-- file html elements here -->
+    </ul>
+
+    <script>
+
+        // const file list for current directory will be added here with c++ code
+        // EXAMPLE:
+        // const files = [
+        //     { file_id: "abcd", is_directory: false, name: "weeee" },
+        //     { file_id: "defg", is_directory: true, name: "weeee2" },
+        //     { file_id: "hijk", is_directory: false, name: "weeee3" }
+        // ];
+
+        function displayFiles() {
+            const fileListElement = document.getElementById('fileList');
+            files.forEach(file => {
+                const listItem = document.createElement('li');
+                // basically redirect to /storage if it's another directory, /file for the file page
+                listItem.innerHTML = file.is_directory ? `
+                    <a href="/storage/${file.file_id}">
+                        <strong>${file.name}</strong><br>
+                    </a>
+                ` : `
+                    <a href="/file/${file.file_id}">
+                        <strong>${file.name}</strong><br>
+                    </a>`;
+                emailListElement.appendChild(listItem);
+            });
+        }
+
+        window.onload = displayFiles;
+    </script>
+</body>
+
+</html>
