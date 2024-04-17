@@ -52,11 +52,12 @@
                     <a href="/storage/${file.file_id}">
                         <strong>${file.name}</strong><br>
                     </a>
-                ` : `
+                ` : 
+                `
                     <a href="/file/${file.file_id}">
                         <strong>${file.name}</strong><br>
                     </a>`;
-                emailListElement.appendChild(listItem);
+                fileListElement.appendChild(listItem);
             });
         }
 

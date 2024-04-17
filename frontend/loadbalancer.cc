@@ -47,9 +47,10 @@ void *frontendThread(void *args) {
       exit(1);
     }
     if (num_read == 0) {
-      // this means the client has closed the connection or died
-      // remove client from server_clients for now 
+      // this means the frontend has closed the connection or died
+      // remove frontend from server_clients for now 
       server_clients.erase(addr);
+      real_server_address.erase(addr);
 
       free(read_buffer);
       close(comm_fd);
