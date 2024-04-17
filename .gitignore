@@ -2,3 +2,4 @@
 frontendserver
 loadbalancer
 .vscode
+*.dSYM
