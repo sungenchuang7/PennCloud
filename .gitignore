@@ -3,3 +3,4 @@ frontendserver
 loadbalancer
 .vscode
 *.dSYM
+.DS_Store
