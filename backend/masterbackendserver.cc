@@ -23,6 +23,14 @@
 #define MAX_LISTEN_BACKLOG 500
 #define DEFAULT_READ_BUFFER_SIZE 1024
 
+//////////////////////////////// THREAD STRUCTS ////////////////////////////////
+struct heartbeat_arg // passed as arg for heartbeat_thread_func
+{
+    std::string storage_node_address;
+    int storage_node_port;
+    heartbeat_arg(std::string address, int port) : storage_node_address(address), storage_node_port(port) {}
+};
+
 void parse_args(int argc, char *argv[]);
 void *worker(void *arg);
 void *heartbeat_thread_func(void *arg);
@@ -34,45 +42,41 @@ void remove_tid(pthread_t tid);
 std::vector<std::string> split_string(std::string str, const std::string delim);
 bool read_config(const char *filepath);
 
-std::string config_file_path;
-
-// std::vector<std::tuple<std::string, int>> server_info_vect; // each tuple = <address, port>
-std::vector<std::string> config_serverIDs; // each element = address:port
-int num_servers;                           // number of storage nodes
-
+////////////////////////////////  modes ////////////////////////////////
 bool author_mode = false;
 bool verbose_mode = false;
 bool debug_mode = false;    // debug mode will print out all the err msgs not required by the hw
 size_t port = DEFAULT_PORT; // this is the port number the main thread will listen on
 
+////////////////////////////////  locks ////////////////////////////////
 pthread_mutex_t server_status_map_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t connections_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t tids_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t heartbeat_sockets_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+////////////////////////////////  data structures for handling server shutdown ////////////////////////////////
 std::vector<int *> comm_fds_vector;
 std::vector<pthread_t> tids_vector;
+////////////////////////////////  data structure for heart beat monitoring ////////////////////////////////
+std::vector<heartbeat_arg *> heartbeat_arg_ptrs; // this stores the pointers to args on the heap used by heartbeat_threads
+std::vector<pthread_t> heartbeat_threads;        // this stores thread ids of the heartbeat threads
+////////////////////////////////  signal flags ////////////////////////////////
 volatile int shut_down_flag = 0;
 volatile int sigusr1_flag = 0;
-
-std::map<std::string, bool> server_status_map;
-
-std::map<int, std::vector<std::string>> tablet_storage_map;
-
-int listen_fd;
-
-//////////////////////////////////////////////// SIGNAL HANDLING ////////////////////////////////////////////////
-// sigset_t set, oldset;
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
+////////////////////////////////  signal handlers ////////////////////////////////
 void shutdown_server(int signum);
 void SIGUSR1_handler(int signum);
 
-//////////////////////////////// THREAD STRUCTS ////////////////////////////////
-struct heartbeat_arg // passed as arg for heartbeat_thread_func
-{
-    std::string storage_node_address;
-    int storage_node_port;
-    heartbeat_arg(std::string address, int port) : storage_node_address(address), storage_node_port(port) {}
-};
+////////////////////////////////  backend comm variables ////////////////////////////////
+std::string config_file_path;
+std::map<std::string, bool> server_status_map;
+std::map<int, std::vector<std::string>> tablet_storage_map;
+std::vector<std::string> config_serverIDs; // server IDs (address + port) read from config file
+int num_servers;                           // number of storage nodes
+
+std::vector<int> backend_heartbeat_sockets; // this stores the fds of sockets used by heartbeat threads
+
+int listen_fd;
 
 //////////////////////////////// READ/WRITE/PRINT HELPERS ////////////////////////////////
 void verbose_print_helper_server(const int &socket_fd, const std::string &msg);
@@ -134,14 +138,11 @@ int main(int argc, char *argv[])
     num_servers = config_serverIDs.size();
     std::cout << "num_servers: " << num_servers << std::endl;
 
-    std::vector<heartbeat_arg *> heartbeat_arg_ptrs(num_servers);
-    std::vector<pthread_t> heartbeat_threads(num_servers);
-    for (int i = 0; i < num_servers; i++)
+    heartbeat_arg_ptrs.resize(num_servers);
+    heartbeat_threads.resize(num_servers);
+    for (int i = 0; i < num_servers; i++) // create a thread for each storage node for monitoring
     {
-        // auto &tuple = server_info_vect.at(i);
-        // std::string server_address = std::get<0>(tuple);
-        // int server_port = std::get<1>(tuple);
-        std::vector<std::string> temp = split_string(config_serverIDs.at(i), ":");
+        std::vector<std::string> temp = split_string(config_serverIDs.at(i), ":"); // split "127.0.0.1:5000" for example
         std::string server_address = temp[0];
         int server_port = std::stoi(temp[1]);
         heartbeat_arg *arg_ptr = new heartbeat_arg(server_address, server_port);
@@ -149,7 +150,7 @@ int main(int argc, char *argv[])
         pthread_create(&heartbeat_threads.at(i), NULL, heartbeat_thread_func, arg_ptr);
     }
 
-    // Initialize socket
+    // Initialize socket for listening for connections with from frontend
     listen_fd = socket(AF_INET, SOCK_STREAM, 0);
 
     if (listen_fd < 0)
@@ -201,16 +202,14 @@ int main(int argc, char *argv[])
 
         if (debug_mode)
         {
-            std::cout << "starting to loop for new connections..." << std::endl;
+            std::cout << "starting to loop for new connections from frontend..." << std::endl;
         }
 
         struct sockaddr_in client_addr;
         socklen_t client_addr_len = sizeof(client_addr);
         int *comm_fd = (int *)malloc(sizeof(int));
-        // thread_args *args_ptr = (thread_args *)malloc(sizeof(thread_args));
 
         *comm_fd = accept(listen_fd, (struct sockaddr *)&client_addr, &client_addr_len);
-        // args_ptr->socket_fd = comm_fd;
 
         if (debug_mode)
         {
@@ -225,15 +224,6 @@ int main(int argc, char *argv[])
         }
 
         pthread_t thread;
-
-        // args_ptr->thread_id = thread;
-        //////////////////////////////// detach threads ////////////////////////////////
-        // pthread_attr_t attr;
-        // pthread_attr_init(&attr);
-        // pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-        // pthread_create(&thread, &attr, worker, &comm_fd);
-        ////////////////////////////////////////////////////////////////////////////////
-        // int create_result = pthread_create(&thread, NULL, worker, args_ptr);
         int create_result = pthread_create(&thread, NULL, worker, &comm_fd);
 
         if (debug_mode)
@@ -394,7 +384,8 @@ void *worker(void *arg)
                 else
                 {
                     pthread_mutex_lock(&server_status_map_mutex);
-                    auto &tablet_servers_list = tablet_storage_map.at(tablet_no); // create a reference to a vector holding servers' indices storing the given tablet
+                    // create a reference to a vector holding servers' indices storing the given tablet
+                    auto &tablet_servers_list = tablet_storage_map.at(tablet_no);
                     std::string primary_server_ID = tablet_servers_list.at(0);
                     while (!server_status_map.at(primary_server_ID))
                     {
@@ -476,7 +467,6 @@ void shutdown_server(int signum)
     pthread_mutex_lock(&connections_mutex);
     for (int i = 0; i < comm_fds_vector.size(); i++)
     {
-
         std::string shut_down_message = "-ERR Server shutting down\r\n";
         write(*(comm_fds_vector.at(i)), shut_down_message.c_str(), shut_down_message.size());
 
@@ -491,6 +481,36 @@ void shutdown_server(int signum)
         if (debug_mode && kill_result)
         {
             std::cerr << "pthread_kill failed..." << std::endl;
+        }
+    }
+
+    if (debug_mode)
+    {
+        std::cout << "heartbeat_threads.size(): " << heartbeat_threads.size() << std::endl;
+        std::cout << "backend_heartbeat_sockets.size(): " << backend_heartbeat_sockets.size() << std::endl;
+    }
+
+    for (int i = 0; i < backend_heartbeat_sockets.size(); i++)
+    {
+        std::string shut_down_message = "-ERR Server shutting down\r\n";
+        write(backend_heartbeat_sockets.at(i), shut_down_message.c_str(), shut_down_message.size());
+
+        //////////////////////////////// SENDIN SIGUSR1 TO EACH CHILD ////////////////////////////////
+        if (debug_mode)
+        {
+            std::cerr << "About to pthread_kill heartbeat_threads.at(" << i << "): " << heartbeat_threads.at(i) << std::endl;
+            std::cout << "SIGUSR1 will be sent soon..." << std::endl;
+        }
+
+        int kill_result = pthread_kill(heartbeat_threads.at(i), SIGUSR1);
+        if (debug_mode)
+        {
+            std::cout << "SIGUSR1 is sent..." << std::endl;
+            if (kill_result)
+            {
+                std::cerr << "pthread_kill failed..." << std::endl;
+            }
+            std::cout << "here?" << std::endl;
         }
     }
     pthread_mutex_unlock(&connections_mutex);
@@ -508,11 +528,31 @@ void shutdown_server(int signum)
             std::cerr << "pthread_join failed" << std::endl;
         }
     }
-    std::cout << "all threads joined inside SIGINT handler" << std::endl;
+    if (debug_mode)
+    {
+        std::cout << "all frontend threads joined inside SIGINT handler" << std::endl;
+    }
+
+    for (auto tid : heartbeat_threads) // fix this first, make sure pthread_join is called
+    {
+        int join_result = pthread_join(tid, NULL);
+        if (debug_mode && join_result)
+        {
+            std::cerr << "pthread_join failed" << std::endl;
+        }
+    }
+    if (debug_mode)
+    {
+        std::cout << "all backend heartbeat threads joined inside SIGINT handler" << std::endl;
+    }
 
     close(listen_fd);
+    for (const auto &ptr : heartbeat_arg_ptrs)
+    {
+        delete ptr;
+    }
 
-    exit(0);
+    exit(EXIT_SUCCESS);
 }
 
 void verbose_print_helper_server(const int &socket_fd, const std::string &msg)
@@ -694,8 +734,6 @@ int redirect(char first_char)
 
 void *heartbeat_thread_func(void *arg)
 {
-    int heartbeat_interval = 1;
-    int timeout_interval = heartbeat_interval * 1;
     sigset_t set;
     sigemptyset(&set);
     sigaddset(&set, SIGINT);
@@ -705,43 +743,68 @@ void *heartbeat_thread_func(void *arg)
         return NULL;
     }
 
+    int heartbeat_interval = 1;
+    int timeout_interval = heartbeat_interval * 1;
+
     // int sockfd = ((heartbeat_thread_t*) arg)->sockfd;
     std::string storage_node_address = ((heartbeat_arg *)arg)->storage_node_address;
     int storage_node_port = ((heartbeat_arg *)arg)->storage_node_port;
     std::string server_key = storage_node_address + ":" + std::to_string(storage_node_port);
 
-    while (true)
+    int sockfd = -1;
+    struct sockaddr_in serv_addr;
+    serv_addr.sin_family = AF_INET;
+    serv_addr.sin_port = htons(storage_node_port);
+
+    if (inet_pton(AF_INET, storage_node_address.c_str(), &serv_addr.sin_addr) <= 0)
+    {
+        std::cerr << "Invalid address / Address not supported\n";
+        return nullptr;
+    }
+
+    if ((sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
+    {
+        std::cerr << "Socket creation error\n";
+        return nullptr;
+    }
+
+    pthread_mutex_lock(&heartbeat_sockets_mutex);
+    backend_heartbeat_sockets.push_back(sockfd);
+    pthread_mutex_unlock(&heartbeat_sockets_mutex);
+
+    bool already_connected = false;
+
+    while (!shut_down_flag)
     {
         sleep(heartbeat_interval);
-        int sockfd = -1;
-        struct sockaddr_in serv_addr;
-        serv_addr.sin_family = AF_INET;
-        serv_addr.sin_port = htons(storage_node_port);
-
-        if (inet_pton(AF_INET, storage_node_address.c_str(), &serv_addr.sin_addr) <= 0)
+        if (shut_down_flag)
         {
-            std::cerr << "Invalid address / Address not supported\n";
             return nullptr;
         }
 
-        if ((sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
+        if (!already_connected)
         {
-            std::cerr << "Socket creation error\n";
-            return nullptr;
-        }
-
-        if (connect(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0)
-        {
-            server_status_map[server_key] = false; // cannot connect, assume server is dead
-            if (debug_mode)
+            if (connect(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0)
             {
-                std::cerr << "Unable to connect to " << server_key << std::endl;
+                server_status_map[server_key] = false; // cannot connect, assume server is dead
+                if (debug_mode)
+                {
+                    perror("???");
+                    std::cerr << "Unable to connect to " << server_key << std::endl;
+                }
+                continue;
             }
-            continue;
+            already_connected = true;
         }
+        
 
         std::string heartbeat_message = "HRBT\r\n";
-        write_helper(sockfd, heartbeat_message);
+
+        if (!write_helper(sockfd, heartbeat_message))
+        {
+            return nullptr;
+        }
+        verbose_print_helper_server(sockfd, heartbeat_message);
 
         struct timeval tv;
         tv.tv_sec = timeout_interval;
@@ -768,11 +831,11 @@ void *heartbeat_thread_func(void *arg)
         }
         pthread_mutex_unlock(&server_status_map_mutex);
 
-        if (is_alive)
-        {
-            std::string response = "QUIT\r\n";
-            write_helper(sockfd, response);
-        }
+        // if (is_alive)
+        // {
+        //     std::string response = "QUIT\r\n";
+        //     write_helper(sockfd, response);
+        // }
     }
 
     return NULL;
