@@ -22,15 +22,18 @@
 #include <uuid/uuid.h>
 
 std::string STATICS_LOC = "./statics/";
+int MAX_BUFF_SIZE = 1000;
 
-struct Email {
-    std::string message_id;
-    std::string subject;
-    std::string sender;
-    std::string arrival_time;
+struct Email
+{
+  std::string message_id;
+  std::string subject;
+  std::string sender;
+  std::string arrival_time;
 };
 
-struct File {
+struct File
+{
   std::string file_id;
   std::string name;
   bool is_directory;
@@ -63,7 +66,119 @@ std::unordered_map<std::string, std::string> parse_cookies(std::string cookies)
 // TODO: Can combine these static file rendering functions
 // TODO: Put routes in map:function pairs
 
-// GET ROUTES
+// BACKEND GET ROUTES
+
+// Ping master node for backend server address
+std::string get_backend_address()
+{
+  return "";
+}
+
+// Make a get request to the backend server for value of key
+// Returns error message if request fails
+std::string get_kvs(std::string ip, int port, std::string row, std::string col)
+{
+  // Create socket connection with server
+  int sock = socket(PF_INET, SOCK_STREAM, 0);
+  struct sockaddr_in servaddr;
+  bzero(&servaddr, sizeof(servaddr));
+  servaddr.sin_family = AF_INET;
+  inet_pton(AF_INET, ip.c_str(), &servaddr.sin_addr);
+  servaddr.sin_port = htons(port);
+
+  // Connect to server
+  if (connect(sock, (struct sockaddr *)&servaddr, sizeof(servaddr)) < 0)
+  {
+    return "--ERR failed to connect to backend server";
+  }
+
+  // Make get request to server
+  std::string request = "GET:" + row + ":" + col + "\r\n";
+  write(sock, request.c_str(), request.length());
+
+  std::string command;
+  char buffer[MAX_BUFF_SIZE];
+  int end_index = 0;
+  bool has_full_command = false;
+
+  // Read from server for line that ends in <CRLF>
+  while (!has_full_command)
+  {
+    char c;
+    if (read(sock, &c, 1) > 0)
+    {
+      buffer[end_index] = c;
+
+      if (end_index >= 1 && c == '\n' && buffer[end_index - 1] == '\r')
+      {
+        has_full_command = true;
+        buffer[end_index - 1] = '\0'; // Replace \r\n with \0
+        command = buffer;
+      }
+
+      end_index++;
+    }
+  }
+
+  if (command == "+OK Server ready")
+  {
+    // Read from server for +OK<CRLF>
+    bzero(buffer, MAX_BUFF_SIZE);
+    has_full_command = false;
+    end_index = 0;
+
+    while (!has_full_command)
+    {
+      char c;
+      if (read(sock, &c, 1) > 0)
+      {
+        buffer[end_index] = c;
+
+        if (end_index >= 1 && c == '\n' && buffer[end_index - 1] == '\r')
+        {
+          has_full_command = true;
+          buffer[end_index - 1] = '\0'; // Replace \r\n with \0
+          command = buffer;
+        }
+
+        end_index++;
+      }
+    }
+  }
+
+  // Check if get request returned +OK
+  if (command != "+OK")
+  {
+    return "--ERR failed to get value from backend server";
+  }
+  // Read from server until <CRLF>.<CRLF>
+  bzero(buffer, MAX_BUFF_SIZE);
+  has_full_command = false;
+  end_index = 0;
+  while (!has_full_command)
+  {
+    char c;
+    if (read(sock, &c, 1) > 0)
+    {
+      buffer[end_index] = c;
+
+      if (end_index >= 4 && c == '\n' && buffer[end_index - 1] == '\r' && buffer[end_index - 2] == '.' && buffer[end_index - 3] == '\n' && buffer[end_index - 4] == '\r')
+      {
+        has_full_command = true;
+        buffer[end_index - 4] = '\0'; // Replace \r\n.\r\n with \0
+        command = buffer;
+      }
+
+      end_index++;
+    }
+  }
+
+  // Close connection
+  close(sock);
+  return command;
+}
+
+// FRONTEND GET ROUTES
 std::tuple<std::string, std::string, std::string> get_index(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers)
 {
   // TODO: Add check for if logged out
@@ -163,7 +278,7 @@ std::tuple<std::string, std::string, std::string> get_home(ReqInitLine *req_init
     headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
     return std::make_tuple(init_response, headers, message_body);
   }
-  
+
   std::unordered_map<std::string, std::string> cookies = parse_cookies(req_headers["Cookie"]);
   if (cookies.find("auth_token") == cookies.end() || cookies["auth_token"] != cookies["sid"])
   {
@@ -231,7 +346,7 @@ std::tuple<std::string, std::string, std::string> get_inbox(ReqInitLine *req_ini
     headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
     return std::make_tuple(init_response, headers, message_body);
   }
-  
+
   // Get user sid cookie value
   std::string sid = cookies["sid"];
 
@@ -239,10 +354,9 @@ std::tuple<std::string, std::string, std::string> get_inbox(ReqInitLine *req_ini
 
   // Map of email messages {message_id, subject, sender, arrival_time}
   std::unordered_map<std::string, Email> emails = {
-        { "message1", { "message1", "Subject 1", "user1@localhost", "Sat Apr 13 00:00:00 2024" } },
-        { "message2", { "message2", "Subject 2", "user2@localhost", "Sun Apr 14 00:00:00 2024" } },
-        { "message3", { "message3", "Subject 3", "user3@localhost", "Sun Apr 15 00:00:00 2024" } }
-    };
+      {"message1", {"message1", "Subject 1", "user1@localhost", "Sat Apr 13 00:00:00 2024"}},
+      {"message2", {"message2", "Subject 2", "user2@localhost", "Sun Apr 14 00:00:00 2024"}},
+      {"message3", {"message3", "Subject 3", "user3@localhost", "Sun Apr 15 00:00:00 2024"}}};
 
   // Create response and send HTML
   std::ifstream file(STATICS_LOC + "inbox.html");
@@ -333,7 +447,9 @@ std::tuple<std::string, std::string, std::string> get_inbox_message(ReqInitLine 
   else if (message_id == "message3")
   {
     temp_message = "This is the message for message3.";
-  } else {
+  }
+  else
+  {
     std::string init_response = req_init_line->version + " 404 Not Found\r\n";
     std::string message_body = "No such message exists.";
     std::string headers = "";
@@ -383,7 +499,7 @@ std::tuple<std::string, std::string, std::string> get_inbox_message(ReqInitLine 
   return std::make_tuple(init_response, headers, message_body);
 }
 
-// POST ROUTES
+// FRONTEND POST ROUTES
 
 // Returns map of post body {key, value}
 std::unordered_map<std::string, std::string> parse_post_body(std::string body)
@@ -432,16 +548,19 @@ std::tuple<std::string, std::string, std::string> post_login(ReqInitLine *req_in
   std::string username = body_map["username"];
   std::string password = body_map["password"];
 
-  // TODO: Check if username and password are correct
-  // For now, just return valid if the username=cis505 and password=pass
-  if (username != "cis505" || password != "pass")
+  // TODO: Ping backend master for backend server address
+  // Check if username and password are correct
+  std::string command = get_kvs("127.0.0.1", 7000, "user_" + username, "password.txt");
+  if (password != command)
   {
     std::string init_response = req_init_line->version + " 401 Unauthorized\r\n";
     std::string message_body = "Incorrect username or password. Please try again.";
     std::string headers = "";
     headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
     return std::make_tuple(init_response, headers, message_body);
-  } else {
+  }
+  else
+  {
     std::string message_body = "";
     std::string init_response = req_init_line->version + " 303 Found\r\n";
     std::string headers = "";
@@ -466,7 +585,6 @@ std::tuple<std::string, std::string, std::string> post_send_message(ReqInitLine 
   std::cerr << "Recipient: " << recipient << std::endl;
   std::cerr << "Subject: " << subject << std::endl;
   std::cerr << "Message: " << message << std::endl;
-
 
   // TODO: Convert message to email format
   // DATE: current date and time
@@ -511,11 +629,10 @@ std::tuple<std::string, std::string, std::string> post_forward_message(ReqInitLi
   return std::make_tuple("", "", "");
 }
 
-
-
-// File system functions 
-//Get
-std::tuple<std::string, std::string, std::string> get_storage(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers) {
+// File system functions
+// Get
+std::tuple<std::string, std::string, std::string> get_storage(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers)
+{
   // Check if user is logged in (auth_token=sid)
   if (req_headers.find("Cookie") == req_headers.end())
   {
@@ -535,7 +652,7 @@ std::tuple<std::string, std::string, std::string> get_storage(ReqInitLine *req_i
     headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
     return std::make_tuple(init_response, headers, message_body);
   }
-  
+
   // Get user sid cookie value
   std::string sid = cookies["sid"];
 
@@ -543,10 +660,9 @@ std::tuple<std::string, std::string, std::string> get_storage(ReqInitLine *req_i
 
   // Map of files {file_id, name, is_directory}
   std::unordered_map<std::string, File> files = {
-        { "file1", { "file1", "File 1", false } },
-        { "file2", { "file2", "File 2", false } },
-        { "file3", { "file3", "File 3", false } }
-    };
+      {"file1", {"file1", "File 1", false}},
+      {"file2", {"file2", "File 2", false}},
+      {"file3", {"file3", "File 3", false}}};
 
   // Create response and send HTML
   std::ifstream storage_file(STATICS_LOC + "storage.html");
@@ -576,10 +692,13 @@ std::tuple<std::string, std::string, std::string> get_storage(ReqInitLine *req_i
     file_script += "{";
     file_script += "file_id: \"" + file.second.file_id + "\",";
     file_script += "name: \"" + file.second.name + "\",";
-    if (file.second.is_directory) {
+    if (file.second.is_directory)
+    {
       fprintf(stderr, "is directory!\n");
       file_script += "is_directory: true";
-    } else {
+    }
+    else
+    {
       fprintf(stderr, "is not directory!\n");
       file_script += "is_directory: false";
     }
@@ -645,7 +764,9 @@ std::tuple<std::string, std::string, std::string> get_file(ReqInitLine *req_init
   {
     name = "file 3";
     temp_message = "This is file 3.";
-  } else {
+  }
+  else
+  {
     std::string init_response = req_init_line->version + " 404 Not Found\r\n";
     std::string message_body = "No such file exists.";
     std::string headers = "";

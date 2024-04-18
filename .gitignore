@@ -1,6 +1,8 @@
 *.o
 frontendserver
 loadbalancer
+backendserver
+masterbackendserver
 .vscode
 *.dSYM
 .DS_Store
