@@ -32,7 +32,7 @@ struct heartbeat_arg // passed as arg for heartbeat_thread_func
 };
 
 void parse_args(int argc, char *argv[]);
-void *worker(void *arg);
+void *frontend_thread_func(void *arg); // this thread handles frontend-backendmaster comms
 void *heartbeat_thread_func(void *arg);
 void add_connection(int *socket_fd);
 void remove_connection(int socket_fd);
@@ -91,36 +91,36 @@ int redirect(char first_char);
 int main(int argc, char *argv[])
 {
     //////////////////////////////// REGISTERING SIGINT HANDLER ////////////////////////////////
-    // signal(SIGINT, shutdown_server);
-    struct sigaction act;
-    // clear the sigaction structure
-    sigemptyset(&act.sa_mask);
-    // set the handler function
-    act.sa_handler = shutdown_server;
-    // no flags
-    act.sa_flags = 0;
-    // set the new handler for SIGINT
-    if (sigaction(SIGINT, &act, NULL) < 0)
-    {
-        std::cerr << "sigaction for SIGINT failed..." << std::endl;
-        return 1;
-    }
+    // // signal(SIGINT, shutdown_server);
+    // struct sigaction act;
+    // // clear the sigaction structure
+    // sigemptyset(&act.sa_mask);
+    // // set the handler function
+    // act.sa_handler = shutdown_server;
+    // // no flags
+    // act.sa_flags = 0;
+    // // set the new handler for SIGINT
+    // if (sigaction(SIGINT, &act, NULL) < 0)
+    // {
+    //     std::cerr << "sigaction for SIGINT failed..." << std::endl;
+    //     return 1;
+    // }
 
     //////////////////////////////// REGISTERING SIGUSR1 HANDLER ////////////////////////////////
-    // signal(SIGINT, shutdown_server);
-    struct sigaction act_SIGUSR1;
-    // clear the sigaction structure
-    sigemptyset(&act_SIGUSR1.sa_mask);
-    // set the handler function
-    act_SIGUSR1.sa_handler = SIGUSR1_handler;
-    // no flags
-    act_SIGUSR1.sa_flags = 0;
-    // set the new handler for SIGINT
-    if (sigaction(SIGUSR1, &act_SIGUSR1, NULL) < 0)
-    {
-        std::cerr << "sigaction for SIGUSR1 failed..." << std::endl;
-        return 1;
-    }
+    // // signal(SIGINT, shutdown_server);
+    // struct sigaction act_SIGUSR1;
+    // // clear the sigaction structure
+    // sigemptyset(&act_SIGUSR1.sa_mask);
+    // // set the handler function
+    // act_SIGUSR1.sa_handler = SIGUSR1_handler;
+    // // no flags
+    // act_SIGUSR1.sa_flags = 0;
+    // // set the new handler for SIGINT
+    // if (sigaction(SIGUSR1, &act_SIGUSR1, NULL) < 0)
+    // {
+    //     std::cerr << "sigaction for SIGUSR1 failed..." << std::endl;
+    //     return 1;
+    // }
 
     // Parse command-line arguments for port number (-p), author info (-a), and verbose mode (-v)
     parse_args(argc, argv);
@@ -137,6 +137,8 @@ int main(int argc, char *argv[])
     // Setup socket and bind to port
     num_servers = config_serverIDs.size();
     std::cout << "num_servers: " << num_servers << std::endl;
+
+    init_tablet_storage_map();
 
     heartbeat_arg_ptrs.resize(num_servers);
     heartbeat_threads.resize(num_servers);
@@ -216,7 +218,7 @@ int main(int argc, char *argv[])
             std::cout << "*comm_fd: " << *comm_fd << std::endl;
         }
 
-        add_connection(comm_fd);
+        // add_connection(comm_fd);
 
         if (debug_mode)
         {
@@ -224,7 +226,7 @@ int main(int argc, char *argv[])
         }
 
         pthread_t thread;
-        int create_result = pthread_create(&thread, NULL, worker, &comm_fd);
+        int create_result = pthread_create(&thread, NULL, frontend_thread_func, comm_fd);
 
         if (debug_mode)
         {
@@ -235,14 +237,14 @@ int main(int argc, char *argv[])
             std::cerr << "pthread_create failed" << std::endl;
             break;
         }
-        add_tid(thread);
+        // add_tid(thread);
         std::cout << "tids_vector.size(): " << tids_vector.size() << std::endl;
     }
 
     return 0;
 }
 
-void *worker(void *arg)
+void *frontend_thread_func(void *arg)
 {
     sigset_t set;
     sigemptyset(&set);
@@ -255,7 +257,7 @@ void *worker(void *arg)
 
     // int socket_fd = ((thread_args *)arg)->socket_fd;
     int socket_fd = *((int *)arg);
-    std::cout << "inside worker, socket_fd: " << socket_fd << std::endl;
+    std::cout << "inside frontend_thread_func, socket_fd: " << socket_fd << std::endl;
 
     std::string buffer, command;
     ssize_t bytes_read;
@@ -267,18 +269,22 @@ void *worker(void *arg)
         std::cerr << "[" << socket_fd << "] New connection" << std::endl;
     }
     std::string welcome_message = "+OK Server ready (Author: Team 13)\r\n";
-    if (!write_helper(socket_fd, welcome_message))
-    {
-        close(socket_fd);
-        remove_connection(socket_fd);
-        return NULL;
-    }
+    // bool result = write_helper(socket_fd, welcome_message);
+    // if (!result)
+    // {
+    //     std::cout << "result = false" << std::endl;
+    //     close(socket_fd);
+    //     remove_connection(socket_fd);
+    //     return NULL;
+    // }
+    write_helper(socket_fd, welcome_message);
 
     verbose_print_helper_server(socket_fd, welcome_message);
 
     //////// Start reading from the client
     while (true)
     {
+        std::cout << "entering while loop here" << std::endl;
         if (shut_down_flag)
         {
             close(socket_fd);
@@ -369,23 +375,66 @@ void *worker(void *arg)
 
             std::string response = "";
 
-            if (command == "INIT")
+            if (command.substr(0, 4) == "INIT")
             {
+                if (debug_mode)
+                {
+                    std::cout << "MASTER received command: " << command << std::endl;
+                }
 
-                std::vector<std::string> temp = split_string(command, ",");
-                std::string login_username = temp[1];
-                char first_char = temp[1].at(0);
+                std::vector<std::string> command_tokens = split_string(command, ","); // INIT,linhphan -> {INIT, linhphan}
+
+                if (command_tokens.size() != 2)
+                {
+                    response = "-ERR Incorrect command syntax\r\n";
+                    write_helper(socket_fd, response); 
+                    // if (!write_helper(socket_fd, response))
+                    // {
+                    //     close(socket_fd);
+                    //     remove_connection(socket_fd);
+                    //     return NULL;
+                    // }
+                    continue;
+                }
+
+                if (debug_mode)
+                {
+                    std::cout << "command_tokens.size(): " << command_tokens.size() << std::endl;
+                }
+
+                std::string row_key = command_tokens[1];
+
+                if (debug_mode)
+                {
+                    std::cout << "row_key: " << row_key << std::endl;
+                }
+
+                char first_char = row_key.at(0);
 
                 int tablet_no = redirect(first_char);
+
+                if (debug_mode)
+                {
+                    std::cout << "tablet_no: " << tablet_no << std::endl;
+                }
+
                 if (tablet_no == -1)
                 {
                     response = "-ERR invalid row key\r\n";
                 }
                 else
                 {
-                    pthread_mutex_lock(&server_status_map_mutex);
+                    // pthread_mutex_lock(&server_status_map_mutex);
                     // create a reference to a vector holding servers' indices storing the given tablet
+                    if (debug_mode)
+                    {
+                        std::cout << "count: " << tablet_storage_map.count(2) << std::endl;
+                    }
                     auto &tablet_servers_list = tablet_storage_map.at(tablet_no);
+                    if (debug_mode)
+                    {
+                        std::cout << "broke here?" << std::endl;
+                    }
                     std::string primary_server_ID = tablet_servers_list.at(0);
                     while (!server_status_map.at(primary_server_ID))
                     {
@@ -395,12 +444,13 @@ void *worker(void *arg)
                     }
                     response = "RDIR," + primary_server_ID + "\r\n";
                 }
-                if (!write_helper(socket_fd, response))
-                {
-                    close(socket_fd);
-                    remove_connection(socket_fd);
-                    return NULL;
-                }
+                write_helper(socket_fd, response);
+                // if (!write_helper(socket_fd, response))
+                // {
+                //     close(socket_fd);
+                //     remove_connection(socket_fd);
+                //     return NULL;
+                // }
                 verbose_print_helper_server(socket_fd, response);
             }
             else if (command == "STAT")
@@ -414,6 +464,7 @@ void *worker(void *arg)
                     std::string serv_status_str = std::to_string(pair.second);
                     response += serv_addr_str + ":" + serv_port_str + ":" + serv_status_str + ",";
                 }
+                response += "\r\n"; 
                 write_helper(socket_fd, response);
             }
         }
@@ -455,102 +506,102 @@ void remove_connection(int socket_fd)
 
 void shutdown_server(int signum)
 {
-    std::cout << "SIGINT received!!" << std::endl;
-    shut_down_flag = 1; // sets global shutdown flag to true
+    // std::cout << "SIGINT received!!" << std::endl;
+    // shut_down_flag = 1; // sets global shutdown flag to true
 
-    if (debug_mode)
-    {
-        std::cout << "comm_fds_vector.size(): " << comm_fds_vector.size() << std::endl;
-        std::cout << "tids_vector.size(): " << tids_vector.size() << std::endl;
-    }
+    // if (debug_mode)
+    // {
+    //     std::cout << "comm_fds_vector.size(): " << comm_fds_vector.size() << std::endl;
+    //     std::cout << "tids_vector.size(): " << tids_vector.size() << std::endl;
+    // }
 
-    pthread_mutex_lock(&connections_mutex);
-    for (int i = 0; i < comm_fds_vector.size(); i++)
-    {
-        std::string shut_down_message = "-ERR Server shutting down\r\n";
-        write(*(comm_fds_vector.at(i)), shut_down_message.c_str(), shut_down_message.size());
+    // pthread_mutex_lock(&connections_mutex);
+    // for (int i = 0; i < comm_fds_vector.size(); i++)
+    // {
+    //     std::string shut_down_message = "-ERR Server shutting down\r\n";
+    //     write(*(comm_fds_vector.at(i)), shut_down_message.c_str(), shut_down_message.size());
 
-        //////////////////////////////// SENDIN SIGUSR1 TO EACH CHILD ////////////////////////////////
-        if (debug_mode)
-        {
-            std::cerr << "About to pthread_kill tids_vector.at(" << i << "): " << tids_vector.at(i) << std::endl;
-        }
-        std::cout << "SIGUSR1 will be sent soon..." << std::endl;
-        int kill_result = pthread_kill(tids_vector.at(i), SIGUSR1);
-        std::cout << "SIGUSR1 is sent..." << std::endl;
-        if (debug_mode && kill_result)
-        {
-            std::cerr << "pthread_kill failed..." << std::endl;
-        }
-    }
+    //     //////////////////////////////// SENDIN SIGUSR1 TO EACH CHILD ////////////////////////////////
+    //     if (debug_mode)
+    //     {
+    //         std::cerr << "About to pthread_kill tids_vector.at(" << i << "): " << tids_vector.at(i) << std::endl;
+    //     }
+    //     std::cout << "SIGUSR1 will be sent soon..." << std::endl;
+    //     int kill_result = pthread_kill(tids_vector.at(i), SIGUSR1);
+    //     std::cout << "SIGUSR1 is sent..." << std::endl;
+    //     if (debug_mode && kill_result)
+    //     {
+    //         std::cerr << "pthread_kill failed..." << std::endl;
+    //     }
+    // }
 
-    if (debug_mode)
-    {
-        std::cout << "heartbeat_threads.size(): " << heartbeat_threads.size() << std::endl;
-        std::cout << "backend_heartbeat_sockets.size(): " << backend_heartbeat_sockets.size() << std::endl;
-    }
+    // if (debug_mode)
+    // {
+    //     std::cout << "heartbeat_threads.size(): " << heartbeat_threads.size() << std::endl;
+    //     std::cout << "backend_heartbeat_sockets.size(): " << backend_heartbeat_sockets.size() << std::endl;
+    // }
 
-    for (int i = 0; i < backend_heartbeat_sockets.size(); i++)
-    {
-        std::string shut_down_message = "-ERR Server shutting down\r\n";
-        write(backend_heartbeat_sockets.at(i), shut_down_message.c_str(), shut_down_message.size());
+    // for (int i = 0; i < backend_heartbeat_sockets.size(); i++)
+    // {
+    //     std::string shut_down_message = "-ERR Server shutting down\r\n";
+    //     write(backend_heartbeat_sockets.at(i), shut_down_message.c_str(), shut_down_message.size());
 
-        //////////////////////////////// SENDIN SIGUSR1 TO EACH CHILD ////////////////////////////////
-        if (debug_mode)
-        {
-            std::cerr << "About to pthread_kill heartbeat_threads.at(" << i << "): " << heartbeat_threads.at(i) << std::endl;
-            std::cout << "SIGUSR1 will be sent soon..." << std::endl;
-        }
+    //     //////////////////////////////// SENDIN SIGUSR1 TO EACH CHILD ////////////////////////////////
+    //     if (debug_mode)
+    //     {
+    //         std::cerr << "About to pthread_kill heartbeat_threads.at(" << i << "): " << heartbeat_threads.at(i) << std::endl;
+    //         std::cout << "SIGUSR1 will be sent soon..." << std::endl;
+    //     }
 
-        int kill_result = pthread_kill(heartbeat_threads.at(i), SIGUSR1);
-        if (debug_mode)
-        {
-            std::cout << "SIGUSR1 is sent..." << std::endl;
-            if (kill_result)
-            {
-                std::cerr << "pthread_kill failed..." << std::endl;
-            }
-            std::cout << "here?" << std::endl;
-        }
-    }
-    pthread_mutex_unlock(&connections_mutex);
+    //     int kill_result = pthread_kill(heartbeat_threads.at(i), SIGUSR1);
+    //     if (debug_mode)
+    //     {
+    //         std::cout << "SIGUSR1 is sent..." << std::endl;
+    //         if (kill_result)
+    //         {
+    //             std::cerr << "pthread_kill failed..." << std::endl;
+    //         }
+    //         std::cout << "here?" << std::endl;
+    //     }
+    // }
+    // pthread_mutex_unlock(&connections_mutex);
 
-    if (debug_mode)
-    {
-        std::cout << "About to call pthread_join in SIGINT handler" << std::endl;
-    }
-    // make sure tids_vector is not modified to be empty at this point
-    for (auto tid : tids_vector) // fix this first, make sure pthread_join is called
-    {
-        int join_result = pthread_join(tid, NULL);
-        if (debug_mode && join_result)
-        {
-            std::cerr << "pthread_join failed" << std::endl;
-        }
-    }
-    if (debug_mode)
-    {
-        std::cout << "all frontend threads joined inside SIGINT handler" << std::endl;
-    }
+    // if (debug_mode)
+    // {
+    //     std::cout << "About to call pthread_join in SIGINT handler" << std::endl;
+    // }
+    // // make sure tids_vector is not modified to be empty at this point
+    // for (auto tid : tids_vector) // fix this first, make sure pthread_join is called
+    // {
+    //     int join_result = pthread_join(tid, NULL);
+    //     if (debug_mode && join_result)
+    //     {
+    //         std::cerr << "pthread_join failed" << std::endl;
+    //     }
+    // }
+    // if (debug_mode)
+    // {
+    //     std::cout << "all frontend threads joined inside SIGINT handler" << std::endl;
+    // }
 
-    for (auto tid : heartbeat_threads) // fix this first, make sure pthread_join is called
-    {
-        int join_result = pthread_join(tid, NULL);
-        if (debug_mode && join_result)
-        {
-            std::cerr << "pthread_join failed" << std::endl;
-        }
-    }
-    if (debug_mode)
-    {
-        std::cout << "all backend heartbeat threads joined inside SIGINT handler" << std::endl;
-    }
+    // for (auto tid : heartbeat_threads) // fix this first, make sure pthread_join is called
+    // {
+    //     int join_result = pthread_join(tid, NULL);
+    //     if (debug_mode && join_result)
+    //     {
+    //         std::cerr << "pthread_join failed" << std::endl;
+    //     }
+    // }
+    // if (debug_mode)
+    // {
+    //     std::cout << "all backend heartbeat threads joined inside SIGINT handler" << std::endl;
+    // }
 
-    close(listen_fd);
-    for (const auto &ptr : heartbeat_arg_ptrs)
-    {
-        delete ptr;
-    }
+    // close(listen_fd);
+    // for (const auto &ptr : heartbeat_arg_ptrs)
+    // {
+    //     delete ptr;
+    // }
 
     exit(EXIT_SUCCESS);
 }
@@ -596,7 +647,7 @@ bool write_helper(int socket_fd, std::string msg)
             {
                 if (debug_mode)
                 {
-                    std::cerr << "write() returns -1. Some other errors occurred." << std::endl;
+                    perror("write() returns -1");
                 }
             }
             return false;
@@ -751,60 +802,66 @@ void *heartbeat_thread_func(void *arg)
     int storage_node_port = ((heartbeat_arg *)arg)->storage_node_port;
     std::string server_key = storage_node_address + ":" + std::to_string(storage_node_port);
 
-    int sockfd = -1;
-    struct sockaddr_in serv_addr;
-    serv_addr.sin_family = AF_INET;
-    serv_addr.sin_port = htons(storage_node_port);
-
-    if (inet_pton(AF_INET, storage_node_address.c_str(), &serv_addr.sin_addr) <= 0)
-    {
-        std::cerr << "Invalid address / Address not supported\n";
-        return nullptr;
-    }
-
-    if ((sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
-    {
-        std::cerr << "Socket creation error\n";
-        return nullptr;
-    }
-
-    pthread_mutex_lock(&heartbeat_sockets_mutex);
-    backend_heartbeat_sockets.push_back(sockfd);
-    pthread_mutex_unlock(&heartbeat_sockets_mutex);
+    // pthread_mutex_lock(&heartbeat_sockets_mutex);
+    // backend_heartbeat_sockets.push_back(sockfd);
+    // pthread_mutex_unlock(&heartbeat_sockets_mutex);
 
     bool already_connected = false;
 
     while (!shut_down_flag)
     {
         sleep(heartbeat_interval);
-        if (shut_down_flag)
+        // if (shut_down_flag)
+        // {
+        //     return nullptr;
+        // }
+        int sockfd = -1;
+        struct sockaddr_in serv_addr;
+        serv_addr.sin_family = AF_INET;
+        serv_addr.sin_port = htons(storage_node_port);
+
+        if (inet_pton(AF_INET, storage_node_address.c_str(), &serv_addr.sin_addr) <= 0)
         {
+            std::cerr << "Invalid address / Address not supported\n";
             return nullptr;
         }
 
-        if (!already_connected)
+        if ((sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
         {
-            if (connect(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0)
-            {
-                server_status_map[server_key] = false; // cannot connect, assume server is dead
-                if (debug_mode)
-                {
-                    perror("???");
-                    std::cerr << "Unable to connect to " << server_key << std::endl;
-                }
-                continue;
-            }
-            already_connected = true;
+            std::cerr << "Socket creation error\n";
+            return nullptr;
         }
-        
+
+        // if (!already_connected)
+        // {
+        //     if (connect(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0)
+        //     {
+        //         server_status_map[server_key] = false; // cannot connect, assume server is dead
+        //         if (debug_mode)
+        //         {
+        //             perror("Errno: ");
+        //             std::cerr << "Unable to connect to " << server_key << std::endl;
+        //         }
+        //         continue;
+        //     }
+        //     already_connected = true;
+        // }
+
+        if (connect(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0)
+        {
+            server_status_map[server_key] = false; // cannot connect, assume server is dead
+            if (debug_mode)
+            {
+                perror("Errno: ");
+                std::cerr << "Unable to connect to " << server_key << std::endl;
+            }
+            continue;
+        }
 
         std::string heartbeat_message = "HRBT\r\n";
+        write_helper(sockfd, heartbeat_message);
 
-        if (!write_helper(sockfd, heartbeat_message))
-        {
-            return nullptr;
-        }
-        verbose_print_helper_server(sockfd, heartbeat_message);
+        // verbose_print_helper_server(sockfd, heartbeat_message);
 
         struct timeval tv;
         tv.tv_sec = timeout_interval;
@@ -816,7 +873,7 @@ void *heartbeat_thread_func(void *arg)
 
         bool is_alive = (valread > 0);
 
-        pthread_mutex_lock(&server_status_map_mutex);
+        // pthread_mutex_lock(&server_status_map_mutex);
         server_status_map[server_key] = is_alive;
         if (debug_mode)
         {
@@ -829,13 +886,13 @@ void *heartbeat_thread_func(void *arg)
                 std::cout << server_key << " is dead!" << std::endl;
             }
         }
-        pthread_mutex_unlock(&server_status_map_mutex);
+        // pthread_mutex_unlock(&server_status_map_mutex);
 
-        // if (is_alive)
-        // {
-        //     std::string response = "QUIT\r\n";
-        //     write_helper(sockfd, response);
-        // }
+        if (is_alive)
+        {
+            std::string response = "QUIT\r\n";
+            write_helper(sockfd, response);
+        }
     }
 
     return NULL;
@@ -875,5 +932,10 @@ void init_tablet_storage_map()
         tablet_storage_map[i].push_back(config_serverIDs.at(primary - 1));
         tablet_storage_map[i].push_back(config_serverIDs.at(rep1 - 1));
         tablet_storage_map[i].push_back(config_serverIDs.at(rep2 - 1));
+    }
+
+    if (debug_mode)
+    {
+        std::cout << "tablet_storage_map.count(2): " << tablet_storage_map.count(2) << std::endl;
     }
 }
