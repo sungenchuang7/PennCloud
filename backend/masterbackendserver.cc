@@ -1,4 +1,3 @@
-// #define _BSD_SOURCE
 #define _DEFAULT_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
@@ -23,7 +22,7 @@
 #define MAX_LISTEN_BACKLOG 500
 #define DEFAULT_READ_BUFFER_SIZE 1024
 
-//////////////////////////////// THREAD STRUCTS ////////////////////////////////
+////////////////////////////// THREAD STRUCTS ////////////////////////////////
 struct heartbeat_arg // passed as arg for heartbeat_thread_func
 {
     std::string storage_node_address;
@@ -861,7 +860,7 @@ void *heartbeat_thread_func(void *arg)
             std::string response = "QUIT\r\n";
             write_helper(sockfd, response);
         }
-        // close(sockfd);
+        // close(sockfd); // storage node shuts itself down if detecting this socket is closed.
     }
 
     return NULL;
@@ -907,8 +906,4 @@ void init_tablet_storage_map()
     {
         std::cout << "tablet_storage_map.count(2): " << tablet_storage_map.count(2) << std::endl;
     }
-}
-
-void add_heartbeat_tid(pthread_t tid)
-{
 }
