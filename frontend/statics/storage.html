@@ -49,12 +49,12 @@
                 const listItem = document.createElement('li');
                 // basically redirect to /storage if it's another directory, /file for the file page
                 listItem.innerHTML = file.is_directory ? `
-                    <a href="/storage/${file.file_id}">
+                    <a href="/storage${file.file_id}">
                         <strong>${file.name}</strong><br>
                     </a>
                 ` : 
                 `
-                    <a href="/file/${file.file_id}">
+                    <a href="/file${file.file_id}">
                         <strong>${file.name}</strong><br>
                     </a>`;
                 fileListElement.appendChild(listItem);

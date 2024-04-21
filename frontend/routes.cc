@@ -861,9 +861,12 @@ std::tuple<std::string, std::string, std::string> get_storage(ReqInitLine *req_i
   std::string folder_path;
   if (req_init_line->path.length() == 8) {
     // path is just /storage
-    folder_path = "/";
+    folder_path = "";
   } else {
     folder_path = req_init_line->path.substr(8);
+    if (folder_path == "/") {
+      folder_path = "";
+    }
   }
 
   // query backend for the uuid of this folder
@@ -873,30 +876,50 @@ std::tuple<std::string, std::string, std::string> get_storage(ReqInitLine *req_i
   std::string searchable = folder_path + ":";
   int ind = metadata.find(searchable);
   std::string temp = metadata.substr(ind);
-  int col_ind = metadata.find(":");
-  int end_ind = metadata.find("\n");
-  std::string uuid = metadata.substr(col_ind + 1, end_ind - col_ind - 1) + ".txt";
+  int col_ind = temp.find(":");
+  int end_ind = temp.find("\n");
+  std::string uuid = temp.substr(col_ind + 1, end_ind - col_ind - 1) + ".txt";
 
   // use uuid to get folder data
   std::string folder_data = get_kvs("127.0.0.1", 7000, "file_" + username, uuid);
 
-  // parse folder data for children 
-  int test_ind = folder_data.find("children_folders:");
-  int curr_ind = folder_data.find("children_files:");
-  folder_data = folder_data.substr(curr_ind + 15);
+  // start getting children 
+  std::vector<File*> files;
+  // parse children_files data for children files
+  int test_ind = folder_data.find("children_folders:\n");
+  int curr_ind = folder_data.find("children_files:\n");
+  folder_data = folder_data.substr(curr_ind + 16);
   curr_ind = folder_data.find("\n"); 
   while(curr_ind < test_ind) {
     std::string file_value = folder_data.substr(0, curr_ind);
-    // TODO: finish this 
+    col_ind = file_value.find(":");
+    std::string file_name = file_value.substr(0, col_ind);
+    File* temp = new File(); 
+    temp->is_directory = false;
+    temp->file_id = folder_path + "/" + file_name;
+    temp->name = file_name;
+    files.push_back(temp);
+    folder_data = folder_data.substr(curr_ind + 1);
+    curr_ind = folder_data.find("\n");
+    test_ind = folder_data.find("children_folders:");
+  }
+  // parse children_folders for children folders 
+  // at this point, curr_ind should point to the \n at the end of children_files: 
+  folder_data = folder_data.substr(curr_ind + 1); 
+  curr_ind = folder_data.find("\n");
+  while (curr_ind != std::string::npos) {
+    std::string folder_value = folder_data.substr(0, curr_ind);
+    col_ind = folder_value.find(":");
+    std::string folder_name = folder_value.substr(0, col_ind);
+    File* temp = new File();
+    temp->is_directory = true;
+    temp->file_id = folder_path + "/" + folder_name;
+    temp->name = folder_name;
+    files.push_back(temp);
+    folder_data = folder_data.substr(curr_ind + 1);
+    curr_ind = folder_data.find("\n");
   }
 
-  // TODO: Make call to backend for files, for now hardcode dummy values
-
-  // Map of files {file_id, name, is_directory}
-  std::unordered_map<std::string, File> files = {
-      {"file1", {"file1", "File 1", false}},
-      {"file2", {"file2", "File 2", false}},
-      {"file3", {"file3", "File 3", false}}};
 
   // Create response and send HTML
   std::ifstream storage_file(STATICS_LOC + "storage.html");
@@ -924,9 +947,9 @@ std::tuple<std::string, std::string, std::string> get_storage(ReqInitLine *req_i
   for (auto const &file : files)
   {
     file_script += "{";
-    file_script += "file_id: \"" + file.second.file_id + "\",";
-    file_script += "name: \"" + file.second.name + "\",";
-    if (file.second.is_directory)
+    file_script += "file_id: \"" + file->file_id + "\",";
+    file_script += "name: \"" + file->name + "\",";
+    if (file->is_directory)
     {
       fprintf(stderr, "is directory!\n");
       file_script += "is_directory: true";
