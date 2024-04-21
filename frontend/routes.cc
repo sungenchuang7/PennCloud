@@ -179,9 +179,9 @@ std::string get_kvs(std::string ip, int port, std::string row, std::string col)
   return command;
 }
 
-std::string put_kvs(std::string ip, int port, std::string row, std::string col, std::string value)
+std::string put_kvs(std::string ip, int port, std::string row, std::string col, std::string value, bool is_cput, std::string prev_value)
 {
-  // TODO: If PUT or DATA fails, frontend should retry
+  // TODO: If (C)PUT or DATA fails, frontend should retry
   // Create socket connection with server
   int sock = socket(PF_INET, SOCK_STREAM, 0);
   struct sockaddr_in servaddr;
@@ -226,11 +226,52 @@ std::string put_kvs(std::string ip, int port, std::string row, std::string col, 
     return "--ERR failed to connect to backend server";
   }
 
-  // Make a put request to server
-  std::string request = "PUT:" + row + ":" + col + "\r\n";
-  write(sock, request.c_str(), request.length());
+  // Make a (c)put request to server
+  if (is_cput)
+  {
+    std::string request = "CPUT:" + row + ":" + col + "\r\n";
+    write(sock, request.c_str(), request.length());
+  } else
+  {
+    std::string request = "PUT:" + row + ":" + col + "\r\n";
+    write(sock, request.c_str(), request.length());
+  }
 
   // Read for +OK Send value with DATA
+  bzero(buffer, MAX_BUFF_SIZE);
+  has_full_command = false;
+  end_index = 0;
+
+  while (!has_full_command)
+  {
+    char c;
+    if (read(sock, &c, 1) > 0)
+    {
+      buffer[end_index] = c;
+
+      if (end_index >= 1 && c == '\n' && buffer[end_index - 1] == '\r')
+      {
+        has_full_command = true;
+        buffer[end_index - 1] = '\0'; // Replace \r\n with \0
+        command = buffer;
+      }
+
+      end_index++;
+    }
+  }
+
+  if (command != "+OK Send value with DATA" && command != "+OK Send first value with DATA")
+  {
+    return "--ERR failed to create (C)PUT request: " + command;
+  }
+
+  // If is cput, send previous value to server
+  if (is_cput)
+  {
+    // Send data to server
+    std::string request = "DATA\r\n";
+    write(sock, request.c_str(), request.length());
+    // Read for +OK
     bzero(buffer, MAX_BUFF_SIZE);
     has_full_command = false;
     end_index = 0;
@@ -252,13 +293,44 @@ std::string put_kvs(std::string ip, int port, std::string row, std::string col, 
         end_index++;
       }
     }
-  if (command != "+OK Send value with DATA")
-  {
-    return "--ERR failed to create PUT request: " + command;
+
+    if (command != "+OK Enter value ending with <CRLF>.<CRLF>")
+    {
+      return "--ERR failed to send DATA to backend server: " + command;
+    }
+      // Write prev_value to server ending in <CRLF>.<CRLF>
+      request = prev_value + "\r\n.\r\n";
+      write(sock, request.c_str(), request.length());
+      // Read for +OK
+      bzero(buffer, MAX_BUFF_SIZE);
+      has_full_command = false;
+      end_index = 0;
+
+      while (!has_full_command)
+      {
+        char c;
+        if (read(sock, &c, 1) > 0)
+        {
+          buffer[end_index] = c;
+
+          if (end_index >= 1 && c == '\n' && buffer[end_index - 1] == '\r')
+          {
+            has_full_command = true;
+            buffer[end_index - 1] = '\0'; // Replace \r\n with \0
+            command = buffer;
+          }
+
+          end_index++;
+        }
+      }
+      if (command != "+OK Enter second value with DATA")
+      {
+        return "--ERR failed to store value in backend server: " + command;
+      }
   }
   
   // Send data to server
-  request = "DATA\r\n";
+  std::string request = "DATA\r\n";
   write(sock, request.c_str(), request.length());
   // Read for +OK
   bzero(buffer, MAX_BUFF_SIZE);
@@ -288,7 +360,7 @@ std::string put_kvs(std::string ip, int port, std::string row, std::string col, 
     return "--ERR failed to send DATA to backend server: " + command;
   }
   
-  // Write to server ending in <CRLF>.<CRLF>
+  // Write new value to server ending in <CRLF>.<CRLF>
   request = value + "\r\n.\r\n";
   write(sock, request.c_str(), request.length());
   // Read for +OK
@@ -313,7 +385,6 @@ std::string put_kvs(std::string ip, int port, std::string row, std::string col, 
       end_index++;
     }
   }
-  std::cerr << "Command length: " << command.length() << std::endl;
   if (command != "+OK Value added")
   {
     return "--ERR failed to store value in backend server: " + command;
@@ -322,11 +393,6 @@ std::string put_kvs(std::string ip, int port, std::string row, std::string col, 
   // Close connection
   close(sock);
   return "+OK Value added";
-}
-
-std::string cput_kvs(std::string ip, int port, std::string row, std::string col, std::string prev_value, std::string value)
-{
-  return "";
 }
 
 // FRONTEND GET ROUTES
@@ -742,20 +808,20 @@ std::tuple<std::string, std::string, std::string> post_signup(ReqInitLine *req_i
   std::string backend_address = get_backend_address();
   
   // create user file 
-  std::string command = put_kvs("127.0.0.1", 7000, "user_" + username, "password.txt", password);
+  std::string command = put_kvs("127.0.0.1", 7000, "user_" + username, "password.txt", password, false, "");
 
   // TODO: handle error 
 
   // after creating user file, also create metadata files for file and email
   // create email metadata file
-  command = put_kvs("127.0.0.1", 7000, "email_" + username, "metadata.txt", "");
+  command = put_kvs("127.0.0.1", 7000, "email_" + username, "metadata.txt", "", false, "");
   // TODO: handle error 
   // create file metadata file, and set home directory / to uuid 1
-  command = put_kvs("127.0.0.1", 7000, "file_" + username, "metadata.txt", "/:1\n");
+  command = put_kvs("127.0.0.1", 7000, "file_" + username, "metadata.txt", "/:1\n", false, "");
   // create next id column
-  command = put_kvs("127.0.0.1", 7000, "file_" + username, "nextid.txt", "2");
+  command = put_kvs("127.0.0.1", 7000, "file_" + username, "nextid.txt", "2", false, "");
   // create home directory
-  command = put_kvs("127.0.0.1", 7000, "file_" + username, "1.txt", "is_directory:true\nparent:0\nchildren_files:\nchildren_folders:\n");
+  command = put_kvs("127.0.0.1", 7000, "file_" + username, "1.txt", "is_directory:true\nparent:0\nchildren_files:\nchildren_folders:\n", false, "");
   
   std::string message_body = "";
   std::string init_response = req_init_line->version + " 303 Success\r\n";
@@ -794,8 +860,10 @@ std::tuple<std::string, std::string, std::string> post_send_message(ReqInitLine 
 
   // TODO: Make backend call to insert message into database
   // For now, just return success
-  std::string response = put_kvs("127.0.0.1", 7000, "email_" + recipient, "1.txt", subject + "\n" + message);
+  std::string response = put_kvs("127.0.0.1", 7000, "email_" + recipient, "1.txt", subject + "\n" + message, false, "");
+  std::string response2 = put_kvs("127.0.0.1", 7000, "email_" + recipient, "1.txt", subject + "2nd\n" + message, true, subject + "\n" + message);
   std::cerr << "Response: " << response << std::endl;
+  std::cerr << "Response2: " << response2 << std::endl;
 
   std::string init_response = req_init_line->version + " 200 OK\r\n";
   std::string message_body = "New message sent successfully.";
