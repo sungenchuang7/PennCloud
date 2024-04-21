@@ -64,12 +64,10 @@ std::unordered_map<std::string, std::string> parse_cookies(std::string cookies)
   return cookie_map;
 }
 
-// TODO: Can combine these static file rendering functions
-// TODO: Put routes in map:function pairs
 
 // BACKEND GET ROUTES
 
-// Ping master node for backend server address
+// TODO: Ping master node for backend server address
 std::string get_backend_address()
 {
   return "";
@@ -179,6 +177,8 @@ std::string get_kvs(std::string ip, int port, std::string row, std::string col)
   return command;
 }
 
+// Make a put or cput request to the backend server
+// Returns error message if request fails
 std::string put_kvs(std::string ip, int port, std::string row, std::string col, std::string value, bool is_cput, std::string prev_value)
 {
   // TODO: If (C)PUT or DATA fails, frontend should retry
