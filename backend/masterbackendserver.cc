@@ -566,7 +566,7 @@ void shutdown_server(int signum)
         std::cout << "all frontend threads joined inside SIGINT handler" << std::endl;
     }
 
-    for (const auto& pair: heartbeat_tid_socket_map) // fix this first, make sure pthread_join is called
+    for (const auto &pair : heartbeat_tid_socket_map) // fix this first, make sure pthread_join is called
     {
         int join_result = pthread_join(pair.first, NULL);
         if (debug_mode && join_result)
@@ -727,7 +727,7 @@ void parse_args(int argc, char *argv[])
             verbose_mode = true;
             break;
         case 'p':
-            port = true;
+            port = std::stoi(optarg);
             break;
         case 'd':
             debug_mode = true;
@@ -785,7 +785,6 @@ void *heartbeat_thread_func(void *arg)
     int storage_node_port = ((heartbeat_arg *)arg)->storage_node_port;
     std::string server_key = storage_node_address + ":" + std::to_string(storage_node_port);
 
-
     while (!shut_down_flag)
     {
         sleep(heartbeat_interval);
@@ -810,7 +809,7 @@ void *heartbeat_thread_func(void *arg)
             return nullptr;
         }
 
-        // update the valid sockfd associated with this thread's tid 
+        // update the valid sockfd associated with this thread's tid
         pthread_mutex_lock(&heartbeat_tid_socket_mutex);
         heartbeat_tid_socket_map[tid] = sockfd;
         pthread_mutex_unlock(&heartbeat_tid_socket_mutex);
