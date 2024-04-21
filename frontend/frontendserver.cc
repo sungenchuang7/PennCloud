@@ -276,7 +276,7 @@ void *connection_thread(void *args)
           std::tuple<std::string, std::string, std::string> response = get_inbox_message(req_init_line, headers);
           send_response(fd, thread_no, std::get<0>(response), std::get<1>(response), std::get<2>(response));
         }
-        else if (req_init_line->path == "/storage")
+        else if (req_init_line->path.find("/storage") != std::string::npos)
         {
           std::tuple<std::string, std::string, std::string> response = get_storage(req_init_line, headers);
           send_response(fd, thread_no, std::get<0>(response), std::get<1>(response), std::get<2>(response));
@@ -305,6 +305,11 @@ void *connection_thread(void *args)
         if (req_init_line->path == "/login")
         {
           std::tuple<std::string, std::string, std::string> response = post_login(req_init_line, headers, message_body_buf);
+          send_response(fd, thread_no, std::get<0>(response), std::get<1>(response), std::get<2>(response));
+        }
+        else if (req_init_line->path == "/signup")
+        {
+          std::tuple<std::string, std::string, std::string> response = post_signup(req_init_line, headers, message_body_buf);
           send_response(fd, thread_no, std::get<0>(response), std::get<1>(response), std::get<2>(response));
         }
         else if (req_init_line->path == "/send")

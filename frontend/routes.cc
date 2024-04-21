@@ -23,6 +23,7 @@
 
 std::string STATICS_LOC = "./statics/";
 int MAX_BUFF_SIZE = 1000;
+static std::map<std::string, std::string> usernames;
 
 struct Email
 {
@@ -327,6 +328,7 @@ std::string cput_kvs(std::string ip, int port, std::string row, std::string col,
 {
   return "";
 }
+
 // FRONTEND GET ROUTES
 std::tuple<std::string, std::string, std::string> get_index(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers)
 {
@@ -371,6 +373,8 @@ std::tuple<std::string, std::string, std::string> get_index(ReqInitLine *req_ini
     char uuid_str[37];
     uuid_unparse(uuid, uuid_str);
     headers += "Set-Cookie: sid=" + std::string(uuid_str) + "; Path=/\r\n";
+    // set username for cookie to empty string 
+    usernames[std::string(uuid_str)] = "";
   }
 
   // Return response
@@ -721,8 +725,51 @@ std::tuple<std::string, std::string, std::string> post_login(ReqInitLine *req_in
     std::unordered_map<std::string, std::string> cookies = parse_cookies(req_headers["Cookie"]);
     std::string sid = cookies["sid"];
     headers += "Set-Cookie: auth_token=" + sid + "; Path=/\r\n";
+    usernames[sid] = username;
     return std::make_tuple(init_response, headers, message_body);
   }
+}
+
+std::tuple<std::string, std::string, std::string> post_signup(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body)
+{
+  // Parse body for username and password
+  std::unordered_map<std::string, std::string> body_map = parse_post_body(body);
+
+  std::string username = body_map["username"];
+  std::string password = body_map["password"];
+
+  // TODO: ping backend master for backend server address
+  std::string backend_address = get_backend_address();
+  
+  // create user file 
+  std::string command = put_kvs("127.0.0.1", 7000, "user_" + username, "password.txt", password);
+
+  // TODO: handle error 
+
+  // after creating user file, also create metadata files for file and email
+  // create email metadata file
+  command = put_kvs("127.0.0.1", 7000, "email_" + username, "metadata.txt", "");
+  // TODO: handle error 
+  // create file metadata file, and set home directory / to uuid 1
+  command = put_kvs("127.0.0.1", 7000, "file_" + username, "metadata.txt", "/:1\n");
+  // create next id column
+  command = put_kvs("127.0.0.1", 7000, "file_" + username, "nextid.txt", "2");
+  // create home directory
+  command = put_kvs("127.0.0.1", 7000, "file_" + username, "1.txt", "is_directory:true\nparent:0\nchildren_files:\nchildren_folders:\n");
+  
+  std::string message_body = "";
+  std::string init_response = req_init_line->version + " 303 Success\r\n";
+  std::string headers = "";
+  headers += "Location: /home\r\n";
+  headers += "Content-Length: 0\r\n"; // Need this header on all post responses
+
+  // Add auth token as a cookie, change token value to equal sid
+  std::unordered_map<std::string, std::string> cookies = parse_cookies(req_headers["Cookie"]);
+  std::string sid = cookies["sid"];
+  headers += "Set-Cookie: auth_token=" + sid + "; Path=/\r\n";
+  usernames[sid] = username;
+
+  return std::make_tuple(init_response, headers, message_body);
 }
 
 // TODO: Send a message
@@ -807,6 +854,41 @@ std::tuple<std::string, std::string, std::string> get_storage(ReqInitLine *req_i
 
   // Get user sid cookie value
   std::string sid = cookies["sid"];
+  // get username from cookie 
+  std::string username = usernames[sid];
+
+  // Get path of folder 
+  std::string folder_path;
+  if (req_init_line->path.length() == 8) {
+    // path is just /storage
+    folder_path = "/";
+  } else {
+    folder_path = req_init_line->path.substr(8);
+  }
+
+  // query backend for the uuid of this folder
+  std::string metadata = get_kvs("127.0.0.1", 7000, "file_" + username, "metadata.txt");
+
+  // parse metadata file for the uuid of the folder
+  std::string searchable = folder_path + ":";
+  int ind = metadata.find(searchable);
+  std::string temp = metadata.substr(ind);
+  int col_ind = metadata.find(":");
+  int end_ind = metadata.find("\n");
+  std::string uuid = metadata.substr(col_ind + 1, end_ind - col_ind - 1) + ".txt";
+
+  // use uuid to get folder data
+  std::string folder_data = get_kvs("127.0.0.1", 7000, "file_" + username, uuid);
+
+  // parse folder data for children 
+  int test_ind = folder_data.find("children_folders:");
+  int curr_ind = folder_data.find("children_files:");
+  folder_data = folder_data.substr(curr_ind + 15);
+  curr_ind = folder_data.find("\n"); 
+  while(curr_ind < test_ind) {
+    std::string file_value = folder_data.substr(0, curr_ind);
+    // TODO: finish this 
+  }
 
   // TODO: Make call to backend for files, for now hardcode dummy values
 
