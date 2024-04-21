@@ -178,6 +178,15 @@ std::string get_kvs(std::string ip, int port, std::string row, std::string col)
   return command;
 }
 
+std::string put_kvs(std::string ip, int port, std::string row, std::string col, std::string value)
+{
+  return "";
+}
+
+std::string cput_kvs(std::string ip, int port, std::string row, std::string col, std::string prev_value, std::string value)
+{
+  return "";
+}
 // FRONTEND GET ROUTES
 std::tuple<std::string, std::string, std::string> get_index(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers)
 {
@@ -549,6 +558,7 @@ std::tuple<std::string, std::string, std::string> post_login(ReqInitLine *req_in
   std::string password = body_map["password"];
 
   // TODO: Ping backend master for backend server address
+  std::string backend_address = get_backend_address();
   // Check if username and password are correct
   std::string command = get_kvs("127.0.0.1", 7000, "user_" + username, "password.txt");
   if (password != command)
