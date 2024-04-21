@@ -180,7 +180,147 @@ std::string get_kvs(std::string ip, int port, std::string row, std::string col)
 
 std::string put_kvs(std::string ip, int port, std::string row, std::string col, std::string value)
 {
-  return "";
+  // TODO: If PUT or DATA fails, frontend should retry
+  // Create socket connection with server
+  int sock = socket(PF_INET, SOCK_STREAM, 0);
+  struct sockaddr_in servaddr;
+  bzero(&servaddr, sizeof(servaddr));
+  servaddr.sin_family = AF_INET;
+  inet_pton(AF_INET, ip.c_str(), &servaddr.sin_addr);
+  servaddr.sin_port = htons(port);
+
+  // Connect to server
+  if (connect(sock, (struct sockaddr *)&servaddr, sizeof(servaddr)) < 0)
+  {
+    return "--ERR failed to connect to backend server";
+  }
+
+  // Read for +OK
+  std::string command;
+  char buffer[MAX_BUFF_SIZE];
+  int end_index = 0;
+  bool has_full_command = false;
+
+  // Read from server for line that ends in <CRLF>
+  while (!has_full_command)
+  {
+    char c;
+    if (read(sock, &c, 1) > 0)
+    {
+      buffer[end_index] = c;
+
+      if (end_index >= 1 && c == '\n' && buffer[end_index - 1] == '\r')
+      {
+        has_full_command = true;
+        buffer[end_index - 1] = '\0'; // Replace \r\n with \0
+        command = buffer;
+      }
+
+      end_index++;
+    }
+  }
+
+  if (command != "+OK Server ready")
+  {
+    return "--ERR failed to connect to backend server";
+  }
+
+  // Make a put request to server
+  std::string request = "PUT:" + row + ":" + col + "\r\n";
+  write(sock, request.c_str(), request.length());
+
+  // Read for +OK Send value with DATA
+    bzero(buffer, MAX_BUFF_SIZE);
+    has_full_command = false;
+    end_index = 0;
+
+    while (!has_full_command)
+    {
+      char c;
+      if (read(sock, &c, 1) > 0)
+      {
+        buffer[end_index] = c;
+
+        if (end_index >= 1 && c == '\n' && buffer[end_index - 1] == '\r')
+        {
+          has_full_command = true;
+          buffer[end_index - 1] = '\0'; // Replace \r\n with \0
+          command = buffer;
+        }
+
+        end_index++;
+      }
+    }
+  if (command != "+OK Send value with DATA")
+  {
+    return "--ERR failed to create PUT request: " + command;
+  }
+  
+  // Send data to server
+  request = "DATA\r\n";
+  write(sock, request.c_str(), request.length());
+  // Read for +OK
+  bzero(buffer, MAX_BUFF_SIZE);
+  has_full_command = false;
+  end_index = 0;
+
+  while (!has_full_command)
+  {
+    char c;
+    if (read(sock, &c, 1) > 0)
+    {
+      buffer[end_index] = c;
+
+      if (end_index >= 1 && c == '\n' && buffer[end_index - 1] == '\r')
+      {
+        has_full_command = true;
+        buffer[end_index - 1] = '\0'; // Replace \r\n with \0
+        command = buffer;
+      }
+
+      end_index++;
+    }
+  }
+
+  if (command != "+OK Enter value ending with <CRLF>.<CRLF>")
+  {
+    return "--ERR failed to send DATA to backend server: " + command;
+  }
+  
+  // Write to server ending in <CRLF>.<CRLF>
+  request = value + "\r\n.\r\n";
+  write(sock, request.c_str(), request.length());
+  // Read for +OK
+  bzero(buffer, MAX_BUFF_SIZE);
+  has_full_command = false;
+  end_index = 0;
+
+  while (!has_full_command)
+  {
+    char c;
+    if (read(sock, &c, 1) > 0)
+    {
+      buffer[end_index] = c;
+
+      if (end_index >= 1 && c == '\n' && buffer[end_index - 1] == '\r')
+      {
+        has_full_command = true;
+        buffer[end_index - 1] = '\0'; // Replace \r\n with \0
+        command = buffer;
+      }
+
+      end_index++;
+    }
+  }
+  std::cerr << "Command length: " << command.length() << std::endl;
+  if (command != "+OK Value added")
+  {
+    return "--ERR failed to store value in backend server: " + command;
+  }
+
+  // Close connection
+  close(sock);
+  return "+OK Value added";
 }
 
 std::string cput_kvs(std::string ip, int port, std::string row, std::string col, std::string prev_value, std::string value)
@@ -607,6 +747,8 @@ std::tuple<std::string, std::string, std::string> post_send_message(ReqInitLine 
 
   // TODO: Make backend call to insert message into database
   // For now, just return success
+  std::string response = put_kvs("127.0.0.1", 7000, "email_" + recipient, "1.txt", subject + "\n" + message);
+  std::cerr << "Response: " << response << std::endl;
 
   std::string init_response = req_init_line->version + " 200 OK\r\n";
   std::string message_body = "New message sent successfully.";
