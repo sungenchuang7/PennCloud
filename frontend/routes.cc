@@ -1091,9 +1091,9 @@ std::tuple<std::string, std::string, std::string> get_storage(ReqInitLine *req_i
   // start getting children 
   std::vector<File*> files;
   // parse children_files data for children files
-  int test_ind = folder_data.find("children_folders:\n");
   int curr_ind = folder_data.find("children_files:\n");
   folder_data = folder_data.substr(curr_ind + 16);
+  int test_ind = folder_data.find("children_folders:\n");
   curr_ind = folder_data.find("\n"); 
   while(curr_ind < test_ind) {
     std::string file_value = folder_data.substr(0, curr_ind);
@@ -1207,34 +1207,39 @@ std::tuple<std::string, std::string, std::string> get_file(ReqInitLine *req_init
   }
 
   // Get message_id from path
-  std::string file_id = req_init_line->path.substr(6);
 
-  // TODO: Make call to backend for message with file_id, for now hardcode temp messages
-  std::string temp_message;
-  std::string name;
-  if (file_id == "file1")
-  {
-    name = "file 1";
-    temp_message = "This is file 1.";
+  // Get user sid cookie value
+  std::string sid = cookies["sid"];
+  // get username from cookie 
+  std::string username = usernames[sid];
+
+  // Get path of folder 
+  std::string file_path = req_init_line->path.substr(5);
+  int slash_ind = file_path.find("/");
+  std::string file_name = file_path;
+  while (slash_ind != std::string::npos) {
+    file_name = file_name.substr(slash_ind + 1);
+    slash_ind = file_name.find("/");
   }
-  else if (file_id == "file2")
-  {
-    name = "file 2";
-    temp_message = "This is file 2.";
-  }
-  else if (file_id == "file3")
-  {
-    name = "file 3";
-    temp_message = "This is file 3.";
-  }
-  else
-  {
-    std::string init_response = req_init_line->version + " 404 Not Found\r\n";
-    std::string message_body = "No such file exists.";
-    std::string headers = "";
-    headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
-    return std::make_tuple(init_response, headers, message_body);
-  }
+  
+  // TODO: test this
+  // query backend for the uuid of this folder
+  std::string metadata = get_kvs("127.0.0.1", 7000, "file_" + username, "metadata.txt");
+
+  // parse metadata file for the uuid of the folder
+  std::string searchable = file_path + ":";
+  int ind = metadata.find(searchable);
+  std::string temp = metadata.substr(ind);
+  int col_ind = temp.find(":");
+  int end_ind = temp.find("\n");
+  std::string uuid = temp.substr(col_ind + 1, end_ind - col_ind - 1) + ".txt";
+
+  // use uuid to get file data
+  std::string file_data = get_kvs("127.0.0.1", 7000, "file_" + username, uuid);
+
+  // parse file_data for actual data 
+  int data_ind = temp.find("data:\n");
+  std::string data = file_data.substr(data_ind + 6);
 
   // Create response and send HTML
   std::ifstream file(STATICS_LOC + "file.html");
@@ -1259,7 +1264,7 @@ std::tuple<std::string, std::string, std::string> get_file(ReqInitLine *req_init
   std::string insert_tag = "<!-- Insert file name here using c++ code-->";
   int insert_index = message_body.find(insert_tag);
   std::string name_html = "\n<h1>";
-  name_html += name;
+  name_html += file_name;
   name_html += "</h1>";
   message_body.insert(insert_index + insert_tag.length(), name_html);
 
@@ -1277,3 +1282,109 @@ std::tuple<std::string, std::string, std::string> get_file(ReqInitLine *req_init
   headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
   return std::make_tuple(init_response, headers, message_body);
 }
+
+std::tuple<std::string, std::string, std::string> post_file(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body)
+{
+  // Check if user is logged in (auth_token=sid)
+  if (req_headers.find("Cookie") == req_headers.end())
+  {
+    std::string init_response = req_init_line->version + " 401 Unauthorized\r\n";
+    std::string message_body = "You must be logged in to view this page.";
+    std::string headers = "";
+    headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
+    return std::make_tuple(init_response, headers, message_body);
+  }
+
+  std::unordered_map<std::string, std::string> cookies = parse_cookies(req_headers["Cookie"]);
+  if (cookies.find("auth_token") == cookies.end() || cookies["auth_token"] != cookies["sid"])
+  {
+    std::string init_response = req_init_line->version + " 401 Unauthorized\r\n";
+    std::string message_body = "You must be logged in to view this page.";
+    std::string headers = "";
+    headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
+    return std::make_tuple(init_response, headers, message_body);
+  }
+
+  // std::unordered_map<std::string, std::string> body_map = parse_post_body(body);
+  // for (auto & t : body_map) {
+  //   std::cerr << "key: " << t.first << "value: " << t.second << "\n";
+  // }
+
+  // // Get message_id from path
+
+  // // Get user sid cookie value
+  // std::string sid = cookies["sid"];
+  // // get username from cookie 
+  // std::string username = usernames[sid];
+
+  // // Get path of folder 
+  // std::string file_path = req_init_line->path.substr(5);
+  // int slash_ind = file_path.find("/");
+  // std::string file_name = file_path;
+  // while (slash_ind != std::string::npos) {
+  //   file_name = file_name.substr(slash_ind + 1);
+  //   slash_ind = file_name.find("/");
+  // }
+  
+  // // TODO: test this
+  // // query backend for the uuid of this folder
+  // std::string metadata = get_kvs("127.0.0.1", 7000, "file_" + username, "metadata.txt");
+
+  // // parse metadata file for the uuid of the folder
+  // std::string searchable = file_path + ":";
+  // int ind = metadata.find(searchable);
+  // std::string temp = metadata.substr(ind);
+  // int col_ind = temp.find(":");
+  // int end_ind = temp.find("\n");
+  // std::string uuid = temp.substr(col_ind + 1, end_ind - col_ind - 1) + ".txt";
+
+  // // use uuid to get file data
+  // std::string file_data = get_kvs("127.0.0.1", 7000, "file_" + username, uuid);
+
+  // // parse file_data for actual data 
+  // int data_ind = temp.find("data:\n");
+  // std::string data = file_data.substr(data_ind + 6);
+
+  // // Create response and send HTML
+  // std::ifstream file(STATICS_LOC + "file.html");
+  // std::string message_body;
+
+  // if (file.is_open())
+  // {
+  //   std::string line;
+  //   while (getline(file, line))
+  //   {
+  //     message_body += line + "\n";
+  //   }
+  //   file.close();
+  // }
+  // else
+  // {
+  //   std::string response = req_init_line->version + " 404 Not Found\r\n";
+  //   return std::make_tuple(response, "", "");
+  // }
+
+  // // Insert message into HTML
+  // std::string insert_tag = "<!-- Insert file name here using c++ code-->";
+  // int insert_index = message_body.find(insert_tag);
+  // std::string name_html = "\n<h1>";
+  // name_html += file_name;
+  // name_html += "</h1>";
+  // message_body.insert(insert_index + insert_tag.length(), name_html);
+
+  // // Create inital response line
+  // std::string init_response = req_init_line->version + " 200 OK\r\n";
+
+  // // Create headers
+  // std::string headers;
+  // // TODO: Date header
+
+  // // Content Type header
+  // headers += "Content-Type: text/html\r\n";
+
+  // // Content Length header
+  // headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
+  // return std::make_tuple(init_response, headers, message_body);
+  return std::make_tuple("idk", "idk", "idk");
+}
+

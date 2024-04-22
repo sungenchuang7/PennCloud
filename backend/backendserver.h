@@ -12,6 +12,18 @@
 #include <fcntl.h>
 #include <signal.h>
 #include <unordered_map>
+#include <sstream>
+#include <limits.h>
+#include <dirent.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <memory>
+#include <shared_mutex>
+#include <mutex>
+#include <thread>
+#include <fcntl.h>
+#include <queue>
+#include <sys/file.h>
 
 // Parses input arguments and sets appropriate flag values.
 // @param argc  The argument count.
@@ -31,3 +43,21 @@ struct threadDetails {
 
 // Activates server shutdown mode and notifies all threads when SIGINT caught.
 void signalHandler(int signal);
+
+// Deallocates memory for the entire KVS.
+void kvsCleanup();
+
+// Logs a user requested action. Action must be successfully executed.
+void logActivity(int nodeIndex, char tablet, std::string action, std::string row, std::string column);
+
+// Saves recent activities to disk.
+void checkpointUpdate(char tablet);
+
+// Worker thread that periodically updates disk storage depending on the updates log.
+void* diskUpdatesThread(void* threadInfo);
+
+// Loads a specified tablet into the KVS.
+void importTablet(char tablet);
+
+// Reads each tablet's record log to determine current activity count.
+void loadRecordCounts();
