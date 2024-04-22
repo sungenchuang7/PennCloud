@@ -9,3 +9,5 @@ To launch backend servers:
 First, run all the storage node servers on port as per `./backend/config.txt` (storage node #1 should use the address and port specified in line 2, storage node #2 line 3 and so on). To run `backendserver`, type `./backendserver -i 1 -c config.txt` for example, where -i is the index for the storage node and -c is the configuration file. 
 
 Then now start running `masterbackendserver` by typing `./masterbackendserver -d -v -p 20000 config.txt`. `masterbackendserver` will send periodic heart-beat messages to detect if any of the storage nodes is down. The communication between the frontend and backend must be initiated via a "INIT,rowkey" command sent to the backend master. The backend will then send back the address and port information of the storage node storing the data for the specified `rowkey` including the username/password login info.  
+
+To clear the memory on disk for storage node #1, navigate to backend/storage_node_1/activity_logs and remove each "tablet_log_" .txt file. Next, navigate to backend/storage_node_1/tablets and remove each "tablet_" .txt file. This information is also stored in a README file in each directory.
