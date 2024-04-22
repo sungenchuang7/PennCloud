@@ -20,9 +20,11 @@
 #include <map>
 #include <iomanip>
 #include <uuid/uuid.h>
+#include <openssl/md5.h>
 
 std::string STATICS_LOC = "./statics/";
 int MAX_BUFF_SIZE = 1000;
+// TODO: Implement address caching (map of rowkey to backend address)
 static std::map<std::string, std::string> usernames;
 std::string MASTER_SERVER_ADDR = "127.0.0.1";
 int MASTER_SERVER_PORT = 20000;
@@ -41,6 +43,16 @@ struct File
   std::string name;
   bool is_directory;
 };
+
+void computeDigest(char *data, int dataLengthBytes, unsigned char *digestBuffer)
+{
+  /* The digest will be written to digestBuffer, which must be at least MD5_DIGEST_LENGTH bytes long */
+
+  MD5_CTX c;
+  MD5_Init(&c);
+  MD5_Update(&c, data, dataLengthBytes);
+  MD5_Final(digestBuffer, &c);
+}
 
 // Returns a map of cookies {cookie_key, cookie_value}
 std::unordered_map<std::string, std::string> parse_cookies(std::string cookies)
@@ -808,7 +820,7 @@ std::unordered_map<std::string, std::string> parse_post_body(std::string body)
   std::unordered_map<std::string, std::string> post_body_map;
   std::istringstream ss(body);
   std::string element;
-  while (std::getline(ss, element, '&'))
+  while (std::getline(ss, element, '&')) // TODO: This might be an issue an email or file contains a & character
   {
     post_body_map[element.substr(0, element.find("="))] = element.substr(element.find("=") + 1);
   }
@@ -850,12 +862,14 @@ std::tuple<std::string, std::string, std::string> post_login(ReqInitLine *req_in
   std::string password = body_map["password"];
 
   // Ping backend master for backend server address
-  std::string backend_address_port = get_backend_address("user_" + username);
-  std::string backend_address = backend_address_port.substr(0, backend_address_port.find(":"));
-  int backend_port = std::stoi(backend_address_port.substr(backend_address_port.find(":") + 1));
+  // std::string backend_address_port = get_backend_address("user_" + username);
+  // std::string backend_address = backend_address_port.substr(0, backend_address_port.find(":"));
+  // int backend_port = std::stoi(backend_address_port.substr(backend_address_port.find(":") + 1));
 
   // Check if username and password are correct
-  std::string command = get_kvs(backend_address, backend_port, "user_" + username, "password.txt");
+  // std::string command = get_kvs(backend_address, backend_port, "user_" + username, "password.txt");
+  std::string command = get_kvs("127.0.0.1", 7000, "user_" + username, "password.txt");
+
   if (password != command)
   {
     std::string init_response = req_init_line->version + " 401 Unauthorized\r\n";
@@ -930,28 +944,64 @@ std::tuple<std::string, std::string, std::string> post_send_message(ReqInitLine 
   std::string recipient = body_map["recipient"];
   std::string subject = body_map["subject"];
   std::string message = body_map["message"];
-  std::cerr << "Recipient: " << recipient << std::endl;
+  std::cerr << "Recipient(s): " << recipient << std::endl;
   std::cerr << "Subject: " << subject << std::endl;
   std::cerr << "Message: " << message << std::endl;
 
-  // TODO: Add error handling for misformatted email
+  // Parse multiple recipients
+  std::vector<std::string> recipients;
+  std::istringstream ss(recipient);
+  std::string element;
+  while (std::getline(ss, element, ';'))
+  {
+    recipients.push_back(element);
+  }
+  // TODO: update sending to users outside @penncloud
+  for (std::string recipient : recipients)
+  {
+    // Convert message to email format
+    // DATE: current date and time
+    // FROM: usename@domain
+    // TO: recipient@domain
+    // SUBJECT: subject
+    // MESSAGE: message
+    // TODO: find out why username is empty
+    std::cerr << "sid: " << req_headers["sid"] << std::endl;
+    std::cerr << "username: " << usernames[req_headers["sid"]] << std::endl;
+    std::time_t email_time = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    std::string email_time_string = std::ctime(&email_time);
+    std::string email_str = "DATE: " + email_time_string + "\n";
+    email_str += "FROM: " + usernames[req_headers["sid"]] + "@penncloud\n";
+    email_str += "TO: " + recipient + "\n";
+    email_str += "SUBJECT: " + subject + "\n";
+    email_str += "MESSAGE: " + message + "\n";
 
-  // TODO: Convert message to email format
-  // DATE: current date and time
-  // FROM: usename@domain (not sure how to get this)
-  // TO: recipient@domain
-  // SUBJECT: subject
-  // MESSAGE: message
-
-  // TODO: Create message_id using hash of message with timestamp
-
-  // TODO: Make backend call to insert message into database
-  // For now, just return success
-  std::string response = put_kvs("127.0.0.1", 7000, "email_" + recipient, "1.txt", subject + "\n" + message, false, "");
-  std::string response2 = put_kvs("127.0.0.1", 7000, "email_" + recipient, "1.txt", subject + "2nd\n" + message, true, subject + "\n" + message);
-  std::cerr << "Response: " << response << std::endl;
-  std::cerr << "Response2: " << response2 << std::endl;
-
+    // Create a message_id that is a hash of the email string
+    unsigned char digest_buf[MD5_DIGEST_LENGTH];
+    computeDigest((char *)email_str.c_str(), strlen(email_str.c_str()), digest_buf);
+    std::string uidl;
+    for (int i = 0; i < MD5_DIGEST_LENGTH; i++)
+    {
+      uidl += "0123456789ABCDEF"[digest_buf[i] / 16];
+      uidl += "0123456789ABCDEF"[digest_buf[i] % 16];
+    }
+    
+    // Make backend call to insert message into database only if the recipeint is a penncloud user
+    if (recipient.find("@penncloud") != std::string::npos)
+    {
+      // TODO: Add error handling if email not written in
+      std::string put_email_response = put_kvs("127.0.0.1", 7000, "email_" + recipient, uidl + ".txt", email_str, false, "");
+      
+      // Run GET and CPUT until successful
+      std::string put_metadata_response;
+      // while (put_metadata_response != "+OK Value added")
+      // {
+      //   // TODO: may need to handle case if error getting metadata file
+      //   std::string metadata = get_kvs("127.0.0.1", 7000, "email_" + recipient, "metadata.txt");
+      //   put_metadata_response = put_kvs("127.0.0.1", 7000, "email_" + recipient, "metadata.txt", metadata + uidl + "\n", true, metadata);
+      // }
+    }
+  }
   std::string init_response = req_init_line->version + " 200 OK\r\n";
   std::string message_body = "New message sent successfully.";
   std::string headers = "";
