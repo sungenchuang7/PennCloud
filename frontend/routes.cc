@@ -24,6 +24,8 @@
 std::string STATICS_LOC = "./statics/";
 int MAX_BUFF_SIZE = 1000;
 static std::map<std::string, std::string> usernames;
+std::string MASTER_SERVER_ADDR = "127.0.0.1";
+int MASTER_SERVER_PORT = 20000;
 
 struct Email
 {
@@ -67,10 +69,90 @@ std::unordered_map<std::string, std::string> parse_cookies(std::string cookies)
 
 // BACKEND GET ROUTES
 
-// TODO: Ping master node for backend server address
-std::string get_backend_address()
+// Ping master node for backend server address
+std::string get_backend_address(std::string rowkey)
 {
-  return "";
+  // Create socket connection with server
+  int sock = socket(PF_INET, SOCK_STREAM, 0);
+  struct sockaddr_in servaddr;
+  bzero(&servaddr, sizeof(servaddr));
+  servaddr.sin_family = AF_INET;
+  inet_pton(AF_INET, MASTER_SERVER_ADDR.c_str(), &servaddr.sin_addr);
+  servaddr.sin_port = htons(MASTER_SERVER_PORT);
+
+  // Connect to server
+  if (connect(sock, (struct sockaddr *)&servaddr, sizeof(servaddr)) < 0)
+  {
+    return "--ERR failed to connect to backend server";
+  }
+
+  // Read for +OK server ready
+  std::string command;
+  char buffer[MAX_BUFF_SIZE];
+  int end_index = 0;
+  bool has_full_command = false;
+
+  // Read from server for line that ends in <CRLF>
+  while (!has_full_command)
+  {
+    char c;
+    if (read(sock, &c, 1) > 0)
+    {
+      buffer[end_index] = c;
+
+      if (end_index >= 1 && c == '\n' && buffer[end_index - 1] == '\r')
+      {
+        has_full_command = true;
+        buffer[end_index - 1] = '\0'; // Replace \r\n with \0
+        command = buffer;
+      }
+
+      end_index++;
+    }
+  }
+
+  if (command.length() < 3 || command.substr(0, 3) != "+OK")
+  {
+    return "--ERR failed to connect to backend server: " + command;
+  }
+
+  // Make INIT, request
+  std::string request = "INIT," + rowkey + "\r\n";
+  write(sock, request.c_str(), request.length());
+  std::cerr << "Sending INIT request" << std::endl;
+  // Read response from server
+  bzero(buffer, MAX_BUFF_SIZE);
+  has_full_command = false;
+  end_index = 0;
+
+  while (!has_full_command)
+  {
+    char c;
+    std::cerr << "Waiting to read" << std::endl;
+    if (read(sock, &c, 1) > 0)
+    {
+      buffer[end_index] = c;
+
+      if (end_index >= 1 && c == '\n' && buffer[end_index - 1] == '\r')
+      {
+        has_full_command = true;
+        buffer[end_index - 1] = '\0'; // Replace \r\n with \0
+        command = buffer;
+      }
+
+      end_index++;
+    }
+  }
+
+  // Handle errors
+  if (command.length() < 5 || command.substr(0, 5) != "RDIR,")
+  {
+    return "--ERR INIT failed: " + command;
+  }
+  // Close connection
+  close(sock);
+  // Return backend server address
+  return command.substr(5);
 }
 
 // Make a get request to the backend server for value of key
@@ -767,10 +849,13 @@ std::tuple<std::string, std::string, std::string> post_login(ReqInitLine *req_in
   std::string username = body_map["username"];
   std::string password = body_map["password"];
 
-  // TODO: Ping backend master for backend server address
-  std::string backend_address = get_backend_address();
+  // Ping backend master for backend server address
+  std::string backend_address_port = get_backend_address("user_" + username);
+  std::string backend_address = backend_address_port.substr(0, backend_address_port.find(":"));
+  int backend_port = std::stoi(backend_address_port.substr(backend_address_port.find(":") + 1));
+
   // Check if username and password are correct
-  std::string command = get_kvs("127.0.0.1", 7000, "user_" + username, "password.txt");
+  std::string command = get_kvs(backend_address, backend_port, "user_" + username, "password.txt");
   if (password != command)
   {
     std::string init_response = req_init_line->version + " 401 Unauthorized\r\n";
@@ -805,7 +890,7 @@ std::tuple<std::string, std::string, std::string> post_signup(ReqInitLine *req_i
   std::string password = body_map["password"];
 
   // TODO: ping backend master for backend server address
-  std::string backend_address = get_backend_address();
+  // std::string backend_address = get_backend_address("user_" + username);
   
   // create user file 
   std::string command = put_kvs("127.0.0.1", 7000, "user_" + username, "password.txt", password, false, "");
@@ -848,6 +933,8 @@ std::tuple<std::string, std::string, std::string> post_send_message(ReqInitLine 
   std::cerr << "Recipient: " << recipient << std::endl;
   std::cerr << "Subject: " << subject << std::endl;
   std::cerr << "Message: " << message << std::endl;
+
+  // TODO: Add error handling for misformatted email
 
   // TODO: Convert message to email format
   // DATE: current date and time
