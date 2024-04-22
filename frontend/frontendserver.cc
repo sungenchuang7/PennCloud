@@ -322,6 +322,11 @@ void *connection_thread(void *args)
           std::tuple<std::string, std::string, std::string> response = post_delete_message(req_init_line, headers, message_body_buf);
           send_response(fd, thread_no, std::get<0>(response), std::get<1>(response), std::get<2>(response));
         }
+        else if (req_init_line->path == "/upload")
+        {
+          std::tuple<std::string, std::string, std::string> response = post_file(req_init_line, headers, message_body_buf);
+          send_response(fd, thread_no, std::get<0>(response), std::get<1>(response), std::get<2>(response));
+        }
         else
         {
           std::string message_body = "404 Not Found";
