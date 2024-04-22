@@ -6,6 +6,6 @@ Once the load balancer is running, run each of the frontend servers. These front
 In order to connect to the frontend, a user should connect to localhost:8000. The load balancer will then automatically redirect the user to the relevant frontend server. It's imperative that all frontend servers are connected to the load balancer before any users attempt to connect. 
 
 To launch backend servers: 
-First, run all the storage node servers on port as per `./backend/config.txt` (storage node #1 should use the address and port specified in line 2, storage node #2 line 3 and so on). To run `backendserver`, type `./backendserver -v -p 20001 -i 1` for example, where -i is the index for the storage node. 
+First, run all the storage node servers on port as per `./backend/config.txt` (storage node #1 should use the address and port specified in line 2, storage node #2 line 3 and so on). To run `backendserver`, type `./backendserver -i 1 -c config.txt` for example, where -i is the index for the storage node and -c is the configuration file. 
 
 Then now start running `masterbackendserver` by typing `./masterbackendserver -d -v -p 20000 config.txt`. `masterbackendserver` will send periodic heart-beat messages to detect if any of the storage nodes is down. The communication between the frontend and backend must be initiated via a "INIT,rowkey" command sent to the backend master. The backend will then send back the address and port information of the storage node storing the data for the specified `rowkey` including the username/password login info.  
