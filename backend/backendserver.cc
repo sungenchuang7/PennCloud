@@ -968,7 +968,7 @@ void checkpointUpdate() {
     std::string directory(myDirectory);
     
     // Open and lock file.
-    directory = directory + '/' + "storage_node_" + std::to_string(myIndex) + "/tablets/" + "tablet_" + activeTablet + ".txt";
+    directory = directory + '/' + "storage_node_" + std::to_string(myIndex) + "/tablets/" + "tablet_" + activeTablet;
     currentFD = open(directory.c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
     flock(currentFD, LOCK_EX);
 
@@ -996,7 +996,7 @@ void checkpointUpdate() {
 
     // Write log record to disk.
     std::string logDirectory(myDirectory);
-    logDirectory = logDirectory + '/' + "storage_node_" + std::to_string(myIndex) + "/activity_logs/" + "tablet_log_" + activeTablet + ".txt";
+    logDirectory = logDirectory + '/' + "storage_node_" + std::to_string(myIndex) + "/activity_logs/" + "tablet_log_" + activeTablet;
     currentFD = open(logDirectory.c_str(), O_RDWR | O_CREAT | O_APPEND, S_IRUSR | S_IWUSR);
     flock(currentFD, LOCK_EX);
 
@@ -1086,7 +1086,7 @@ void importTablet(char tablet) {
     std::string directory(myDirectory);
 
     // Open file and pick up file lock.
-    directory = directory + '/' + "storage_node_" + std::to_string(myIndex) + "/tablets/" + "tablet_" + tablet + ".txt";
+    directory = directory + '/' + "storage_node_" + std::to_string(myIndex) + "/tablets/" + "tablet_" + tablet;
     currentFD = open(directory.c_str(), O_RDWR | S_IRUSR | S_IWUSR);
     flock(currentFD, LOCK_EX);
     memset(buf, '\0', sizeof(buf));
