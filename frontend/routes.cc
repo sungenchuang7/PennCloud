@@ -815,7 +815,7 @@ std::tuple<std::string, std::string, std::string> get_inbox_message(ReqInitLine 
 // FRONTEND POST ROUTES
 
 // Returns map of post body {key, value}
-std::unordered_map<std::string, std::string> parse_post_body(std::string body)
+std::unordered_map<std::string, std::string> parse_post_body_url_encoded(std::string body)
 {
   std::unordered_map<std::string, std::string> post_body_map;
   std::istringstream ss(body);
@@ -856,7 +856,7 @@ std::unordered_map<std::string, std::string> parse_post_body(std::string body)
 std::tuple<std::string, std::string, std::string> post_login(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body)
 {
   // Parse body for username and password
-  std::unordered_map<std::string, std::string> body_map = parse_post_body(body);
+  std::unordered_map<std::string, std::string> body_map = parse_post_body_url_encoded(body);
 
   std::string username = body_map["username"];
   std::string password = body_map["password"];
@@ -898,7 +898,7 @@ std::tuple<std::string, std::string, std::string> post_login(ReqInitLine *req_in
 std::tuple<std::string, std::string, std::string> post_signup(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body)
 {
   // Parse body for username and password
-  std::unordered_map<std::string, std::string> body_map = parse_post_body(body);
+  std::unordered_map<std::string, std::string> body_map = parse_post_body_url_encoded(body);
 
   std::string username = body_map["username"];
   std::string password = body_map["password"];
@@ -940,7 +940,7 @@ std::tuple<std::string, std::string, std::string> post_signup(ReqInitLine *req_i
 // TODO: Send a message
 std::tuple<std::string, std::string, std::string> post_send_message(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body)
 {
-  std::unordered_map<std::string, std::string> body_map = parse_post_body(body);
+  std::unordered_map<std::string, std::string> body_map = parse_post_body_url_encoded(body);
   std::string recipient = body_map["recipient"];
   std::string subject = body_map["subject"];
   std::string message = body_map["message"];

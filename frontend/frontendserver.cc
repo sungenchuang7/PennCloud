@@ -27,6 +27,7 @@ volatile pthread_t client_threads[100] = {};
 volatile pthread_t hb_thread;
 volatile bool shutting_down = false;
 int listenfd;
+int MAX_BUFF = 1000;
 
 struct ConnectionInfo
 {
@@ -182,7 +183,7 @@ void *connection_thread(void *args)
 
   while (!sig_int)
   {
-    char buffer[1000];
+    char buffer[MAX_BUFF];
     int end_index = 0;
     bool has_full_command = false;
     int cr_index = -2;
@@ -237,10 +238,10 @@ void *connection_thread(void *args)
       {
         int content_length = std::stoi(headers["Content-Length"]);
         int total_bytes_read = 0;
-        char header_buf[1000];
+        char header_buf[MAX_BUFF];
         while (total_bytes_read < content_length)
         {
-          int bytes_to_read = content_length - total_bytes_read;
+          int bytes_to_read = std::min(MAX_BUFF, content_length - total_bytes_read);
           int bytes_read = read(fd, header_buf, bytes_to_read);
           total_bytes_read += bytes_read;
           // Might be missing null terminator
