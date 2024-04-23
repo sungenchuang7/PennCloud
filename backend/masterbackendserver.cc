@@ -705,8 +705,13 @@ bool read_config(const char *filepath)
         return false;
     }
     std::string line;
+    int line_count = 0;
     while (std::getline(file, line)) // each iteration reads a line from the file
     {
+        line_count++;
+        if (line_count == 1) { // first line is the master's own addr and port, should be ignored
+            continue;
+        }
         config_serverIDs.push_back(line);
     }
     file.close();

@@ -913,7 +913,7 @@ std::tuple<std::string, std::string, std::string> post_signup(ReqInitLine *req_i
 
   // after creating user file, also create metadata files for file and email
   // create email metadata file
-  command = put_kvs("127.0.0.1", 7000, "email_" + username, "metadata.txt", "Test", false, "");
+  command = put_kvs("127.0.0.1", 7000, "email_" + username, "metadata.txt", "Metadata\n", false, ""); // Need to send non empty value
   // TODO: handle error 
   // create file metadata file, and set home directory / to uuid 1
   command = put_kvs("127.0.0.1", 7000, "file_" + username, "metadata.txt", "/:1\n", false, "");
@@ -937,7 +937,7 @@ std::tuple<std::string, std::string, std::string> post_signup(ReqInitLine *req_i
   return std::make_tuple(init_response, headers, message_body);
 }
 
-// TODO: Send a message
+// Send a message
 std::tuple<std::string, std::string, std::string> post_send_message(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body)
 {
   std::unordered_map<std::string, std::string> body_map = parse_post_body_url_encoded(body);
@@ -964,9 +964,7 @@ std::tuple<std::string, std::string, std::string> post_send_message(ReqInitLine 
     // FROM: usename@domain
     // TO: recipient@domain
     // SUBJECT: subject
-    // MESSAGE: message
-    // TODO: find out why username is empty
-    
+    // MESSAGE: message    
     std::string username = usernames[parse_cookies(req_headers["Cookie"])["sid"]];
     std::time_t email_time = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
     std::string email_time_string = std::ctime(&email_time);
@@ -989,27 +987,22 @@ std::tuple<std::string, std::string, std::string> post_send_message(ReqInitLine 
     // Make backend call to insert message into database only if the recipeint is a penncloud user
     if (recipient.find("@penncloud") != std::string::npos)
     {
-      // TODO: Add error handling if email not written in
       std::string recipient_remove_domain = recipient.substr(0, recipient.find("@"));
       std::string put_email_response = put_kvs("127.0.0.1", 7000, "email_" + recipient_remove_domain, uidl + ".txt", email_str, false, "");
-      std::cerr << "Put email response: " << put_email_response << std::endl;
+      // std::cerr << "Put email response: " << put_email_response << std::endl;
       // Run GET and CPUT until successful
-      // std::string put_metadata_response;
-      // while (put_metadata_response != "+OK Value added")
-      // {
-      //   // TODO: may need to handle case if error getting metadata file
-      //   std::cerr << "Recipient: " << recipient_remove_domain << std::endl;
-      //   std::string metadata = get_kvs("127.0.0.1", 7000, "email_" + recipient_remove_domain, "metadata.txt");
-      //   std::cerr << "Metadata value from get: " << metadata << std::endl;
-      //   if (metadata.length()  <= 5 || metadata.length() > 5 && metadata.substr(0, 5) != "--ERR")
-      //   {
-      //     put_metadata_response = put_kvs("127.0.0.1", 7000, "email_" + recipient_remove_domain, "metadata.txt", metadata + uidl + "\n", true, metadata);
-      //     std::cerr << "Put metadata response: " << put_metadata_response << std::endl;
-      //   } else {
-      //     std::cerr << "Error getting metadata file" << std::endl;
-      //   }
-        
-      // }
+      std::string put_metadata_response;
+      while (put_metadata_response != "+OK Value added")
+      {
+        std::cerr << "Recipient: " << recipient_remove_domain << std::endl;
+        std::string metadata = get_kvs("127.0.0.1", 7000, "email_" + recipient_remove_domain, "metadata.txt");
+        // std::cerr << "Get metadata response: " << metadata << std::endl;
+        if (metadata.length()  <= 5 || metadata.length() > 5 && metadata.substr(0, 5) != "--ERR")
+        {
+          put_metadata_response = put_kvs("127.0.0.1", 7000, "email_" + recipient_remove_domain, "metadata.txt", metadata + uidl + "\n", true, metadata);
+          // std::cerr << "Put metadata response: " << put_metadata_response << std::endl;
+        }    
+      }
     }
   }
   std::string init_response = req_init_line->version + " 200 OK\r\n";
