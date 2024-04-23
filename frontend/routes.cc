@@ -242,7 +242,7 @@ std::string get_kvs(std::string ip, int port, std::string row, std::string col)
   // Check if get request returned +OK
   if (command != "+OK")
   {
-    return "--ERR failed to get value from backend server";
+    return "--ERR failed to get value from backend server: " + command;
   }
   // Read from server until <CRLF>.<CRLF>
   bzero(buffer, MAX_BUFF_SIZE);
@@ -913,7 +913,7 @@ std::tuple<std::string, std::string, std::string> post_signup(ReqInitLine *req_i
 
   // after creating user file, also create metadata files for file and email
   // create email metadata file
-  command = put_kvs("127.0.0.1", 7000, "email_" + username, "metadata.txt", "", false, "");
+  command = put_kvs("127.0.0.1", 7000, "email_" + username, "metadata.txt", "Test", false, "");
   // TODO: handle error 
   // create file metadata file, and set home directory / to uuid 1
   command = put_kvs("127.0.0.1", 7000, "file_" + username, "metadata.txt", "/:1\n", false, "");
@@ -966,12 +966,12 @@ std::tuple<std::string, std::string, std::string> post_send_message(ReqInitLine 
     // SUBJECT: subject
     // MESSAGE: message
     // TODO: find out why username is empty
-    std::cerr << "sid: " << req_headers["sid"] << std::endl;
-    std::cerr << "username: " << usernames[req_headers["sid"]] << std::endl;
+    
+    std::string username = usernames[parse_cookies(req_headers["Cookie"])["sid"]];
     std::time_t email_time = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
     std::string email_time_string = std::ctime(&email_time);
     std::string email_str = "DATE: " + email_time_string + "\n";
-    email_str += "FROM: " + usernames[req_headers["sid"]] + "@penncloud\n";
+    email_str += "FROM: " + username + "@penncloud\n";
     email_str += "TO: " + recipient + "\n";
     email_str += "SUBJECT: " + subject + "\n";
     email_str += "MESSAGE: " + message + "\n";
@@ -990,15 +990,25 @@ std::tuple<std::string, std::string, std::string> post_send_message(ReqInitLine 
     if (recipient.find("@penncloud") != std::string::npos)
     {
       // TODO: Add error handling if email not written in
-      std::string put_email_response = put_kvs("127.0.0.1", 7000, "email_" + recipient, uidl + ".txt", email_str, false, "");
-      
+      std::string recipient_remove_domain = recipient.substr(0, recipient.find("@"));
+      std::string put_email_response = put_kvs("127.0.0.1", 7000, "email_" + recipient_remove_domain, uidl + ".txt", email_str, false, "");
+      std::cerr << "Put email response: " << put_email_response << std::endl;
       // Run GET and CPUT until successful
-      std::string put_metadata_response;
+      // std::string put_metadata_response;
       // while (put_metadata_response != "+OK Value added")
       // {
       //   // TODO: may need to handle case if error getting metadata file
-      //   std::string metadata = get_kvs("127.0.0.1", 7000, "email_" + recipient, "metadata.txt");
-      //   put_metadata_response = put_kvs("127.0.0.1", 7000, "email_" + recipient, "metadata.txt", metadata + uidl + "\n", true, metadata);
+      //   std::cerr << "Recipient: " << recipient_remove_domain << std::endl;
+      //   std::string metadata = get_kvs("127.0.0.1", 7000, "email_" + recipient_remove_domain, "metadata.txt");
+      //   std::cerr << "Metadata value from get: " << metadata << std::endl;
+      //   if (metadata.length()  <= 5 || metadata.length() > 5 && metadata.substr(0, 5) != "--ERR")
+      //   {
+      //     put_metadata_response = put_kvs("127.0.0.1", 7000, "email_" + recipient_remove_domain, "metadata.txt", metadata + uidl + "\n", true, metadata);
+      //     std::cerr << "Put metadata response: " << put_metadata_response << std::endl;
+      //   } else {
+      //     std::cerr << "Error getting metadata file" << std::endl;
+      //   }
+        
       // }
     }
   }
