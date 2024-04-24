@@ -36,11 +36,11 @@
                 })
                 .then(data => {
                 console.log('POST request successful', data);
-                // Handle the response data here
+                alert('Message deleted sucessfully');
                 })
                 .catch(error => {
                 console.error('There was a problem with the POST request:', error);
-                // Handle errors here
+                alert('Error in deleting message. Please try again.');
                 });
         });
 

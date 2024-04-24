@@ -489,6 +489,85 @@ std::string put_kvs(std::string ip, int port, std::string row, std::string col, 
   return "+OK Value added";
 }
 
+std::string delete_kvs(std::string ip, int port, std::string row, std::string col)
+{
+  // Create socket connection with server
+  int sock = socket(PF_INET, SOCK_STREAM, 0);
+  struct sockaddr_in servaddr;
+  bzero(&servaddr, sizeof(servaddr));
+  servaddr.sin_family = AF_INET;
+  inet_pton(AF_INET, ip.c_str(), &servaddr.sin_addr);
+  servaddr.sin_port = htons(port);
+
+  // Connect to server
+  if (connect(sock, (struct sockaddr *)&servaddr, sizeof(servaddr)) < 0)
+  {
+    return "--ERR failed to connect to backend server";
+  }
+
+  // Make get request to server
+  std::string request = "DELE:" + row + ":" + col + "\r\n";
+  write(sock, request.c_str(), request.length());
+
+  std::string command;
+  char buffer[MAX_BUFF_SIZE];
+  int end_index = 0;
+  bool has_full_command = false;
+
+  // Read from server for line that ends in <CRLF>
+  while (!has_full_command)
+  {
+    char c;
+    if (read(sock, &c, 1) > 0)
+    {
+      buffer[end_index] = c;
+
+      if (end_index >= 1 && c == '\n' && buffer[end_index - 1] == '\r')
+      {
+        has_full_command = true;
+        buffer[end_index - 1] = '\0'; // Replace \r\n with \0
+        command = buffer;
+      }
+
+      end_index++;
+    }
+  }
+
+  if (command == "+OK Server ready")
+  {
+    // Read from server for +OK<CRLF>
+    bzero(buffer, MAX_BUFF_SIZE);
+    has_full_command = false;
+    end_index = 0;
+
+    while (!has_full_command)
+    {
+      char c;
+      if (read(sock, &c, 1) > 0)
+      {
+        buffer[end_index] = c;
+
+        if (end_index >= 1 && c == '\n' && buffer[end_index - 1] == '\r')
+        {
+          has_full_command = true;
+          buffer[end_index - 1] = '\0'; // Replace \r\n with \0
+          command = buffer;
+        }
+
+        end_index++;
+      }
+    }
+  }
+
+  // Check if get request returned +OK
+  if (command.find("+OK") != 0)
+  {
+    return "--ERR failed to get value from backend server: " + command;
+  }
+  // Close connection
+  close(sock);
+  return command;
+}
 // FRONTEND GET ROUTES
 std::tuple<std::string, std::string, std::string> get_index(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers)
 {
@@ -660,16 +739,62 @@ std::tuple<std::string, std::string, std::string> get_inbox(ReqInitLine *req_ini
     return std::make_tuple(init_response, headers, message_body);
   }
 
-  // Get user sid cookie value
+
+  // Get username
   std::string sid = cookies["sid"];
+  std::string username = usernames[sid];
+  std::cerr << "Username: " << username << std::endl;
 
-  // TODO: Make call to backend for message headers and arrival times for user, for now hardcode dummy values
+  // Get email metadata
+  std::string email_metadata = get_kvs("127.0.0.1", 7000, "email_" + username, "metadata.txt");
+  std::cerr << "Email metadata: " << email_metadata << std::endl;
+  std::unordered_map<std::string, Email> emails = {};
 
+  // Add email data to emails map
+  std::istringstream ss(email_metadata);
+  std::string message_id;
+  while (std::getline(ss, message_id, '\n'))
+  {
+    if (message_id != "Metadata")
+    {
+      std::cerr << "Message ID: " << message_id << std::endl;
+      std::string email_data = get_kvs("127.0.0.1", 7000, "email_" + username, message_id + ".txt");
+      std::cerr << "Email data: " << email_data << std::endl;
+      std::istringstream ss(email_data);
+      std::string line, arrival_time, sender, recipient, subject, message;
+      while (std::getline(ss, line, '\n'))
+      {
+        if (line.find("DATE: ") == 0)
+        {
+          arrival_time = line.substr(6);
+        
+        }
+        else if (line.find("FROM: ") == 0)
+        {
+          sender = line.substr(6);
+        }
+        else if (line.find("TO: ") == 0)
+        {
+          recipient = line.substr(4);
+        }
+        else if (line.find("SUBJECT: ") == 0)
+        {
+          subject = line.substr(9);
+        }
+        else if (line.find("MESSAGE: ") == 0)
+        {
+          message = line.substr(9);
+        }
+
+      }
+      emails[message_id] = {message_id, subject, sender, arrival_time};
+    }
+  }
   // Map of email messages {message_id, subject, sender, arrival_time}
-  std::unordered_map<std::string, Email> emails = {
-      {"message1", {"message1", "Subject 1", "user1@localhost", "Sat Apr 13 00:00:00 2024"}},
-      {"message2", {"message2", "Subject 2", "user2@localhost", "Sun Apr 14 00:00:00 2024"}},
-      {"message3", {"message3", "Subject 3", "user3@localhost", "Sun Apr 15 00:00:00 2024"}}};
+  // std::unordered_map<std::string, Email> emails = {
+  //     {"message1", {"message1", "Subject 1", "user1@localhost", "Sat Apr 13 00:00:00 2024"}},
+  //     {"message2", {"message2", "Subject 2", "user2@localhost", "Sun Apr 14 00:00:00 2024"}},
+  //     {"message3", {"message3", "Subject 3", "user3@localhost", "Sun Apr 15 00:00:00 2024"}}};
 
   // Create response and send HTML
   std::ifstream file(STATICS_LOC + "inbox.html");
@@ -711,7 +836,6 @@ std::tuple<std::string, std::string, std::string> get_inbox(ReqInitLine *req_ini
 
   // Create headers
   std::string headers;
-  // TODO: Date header
 
   // Content Type header
   headers += "Content-Type: text/html\r\n";
@@ -721,7 +845,7 @@ std::tuple<std::string, std::string, std::string> get_inbox(ReqInitLine *req_ini
   return std::make_tuple(init_response, headers, message_body);
 }
 
-// TODO: Gets message with message_id /inbox/:message_id
+// Gets message with message_id /inbox/:message_id
 std::tuple<std::string, std::string, std::string> get_inbox_message(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers)
 {
   // Check if user is logged in (auth_token=sid)
@@ -746,22 +870,15 @@ std::tuple<std::string, std::string, std::string> get_inbox_message(ReqInitLine 
 
   // Get message_id from path
   std::string message_id = req_init_line->path.substr(7);
+  std::cerr << "Message ID: " << message_id << std::endl;
 
-  // TODO: Make call to backend for message with message_id, for now hardcode temp messages
-  std::string temp_message;
-  if (message_id == "message1")
-  {
-    temp_message = "This is the message for message1.";
-  }
-  else if (message_id == "message2")
-  {
-    temp_message = "This is the message for message2.";
-  }
-  else if (message_id == "message3")
-  {
-    temp_message = "This is the message for message3.";
-  }
-  else
+  // Make call to backend for message with message_id
+  std::string sid = cookies["sid"];
+  std::string username = usernames[sid];
+  std::cerr << "Username: " << username << std::endl;
+  std::string message = get_kvs("127.0.0.1", 7000, "email_" + username, message_id + ".txt");
+  std::cerr << "Message: " << message << std::endl;
+  if (message.find("--ERR") == 0)
   {
     std::string init_response = req_init_line->version + " 404 Not Found\r\n";
     std::string message_body = "No such message exists.";
@@ -791,9 +908,9 @@ std::tuple<std::string, std::string, std::string> get_inbox_message(ReqInitLine 
 
   // Insert message into HTML
   std::string insert_tag = "<div class=\"email-container\">";
-  int insert_index = message_body.find(insert_tag);
+  int insert_index = message_body.find(insert_tag);  
   std::string email_html = "\n<p>";
-  email_html += temp_message;
+  email_html += message;
   email_html += "</p>";
   message_body.insert(insert_index + insert_tag.length(), email_html);
 
@@ -802,7 +919,6 @@ std::tuple<std::string, std::string, std::string> get_inbox_message(ReqInitLine 
 
   // Create headers
   std::string headers;
-  // TODO: Date header
 
   // Content Type header
   headers += "Content-Type: text/html\r\n";
@@ -994,7 +1110,7 @@ std::tuple<std::string, std::string, std::string> post_send_message(ReqInitLine 
       std::string put_metadata_response;
       while (put_metadata_response != "+OK Value added")
       {
-        std::cerr << "Recipient: " << recipient_remove_domain << std::endl;
+        // std::cerr << "Recipient: " << recipient_remove_domain << std::endl;
         std::string metadata = get_kvs("127.0.0.1", 7000, "email_" + recipient_remove_domain, "metadata.txt");
         // std::cerr << "Get metadata response: " << metadata << std::endl;
         if (metadata.length()  <= 5 || metadata.length() > 5 && metadata.substr(0, 5) != "--ERR")
@@ -1012,11 +1128,38 @@ std::tuple<std::string, std::string, std::string> post_send_message(ReqInitLine 
   return std::make_tuple(init_response, headers, message_body);
 }
 
-// TODO: Delete a message
+// Delete a message
 std::tuple<std::string, std::string, std::string> post_delete_message(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body)
 {
-  // TODO: Call backend to delete the key value pair
-  // For now just return success
+  // Parse body for message_id
+  std::unordered_map<std::string, std::string> body_map = parse_post_body_url_encoded(body);
+  std::string message_id = body_map["message_id"];
+  std::cerr << "Message ID: " << message_id << std::endl;
+
+  // Get username
+  std::string sid = parse_cookies(req_headers["Cookie"])["sid"];
+  std::string username = usernames[sid];
+  std::cerr << "Username: " << username << std::endl;
+
+  // Delete message from metadata
+  // Run GET and CPUT until successful
+  std::string put_metadata_response;
+  while (put_metadata_response != "+OK Value added")
+  {
+    std::string metadata = get_kvs("127.0.0.1", 7000, "email_" + username, "metadata.txt");
+    std::cerr << "Get metadata response: " << metadata << std::endl;
+    if (metadata.length()  <= 5 || metadata.length() > 5 && metadata.substr(0, 5) != "--ERR")
+    {
+      std::string new_metadata = metadata.substr(0, metadata.find(message_id) - 1) + metadata.substr(metadata.find(message_id) + message_id.length());
+      put_metadata_response = put_kvs("127.0.0.1", 7000, "email_" + username, "metadata.txt", new_metadata, true, metadata);
+      std::cerr << "Put metadata response: " << put_metadata_response << std::endl;
+    }    
+  }
+
+  // Call delete on email message
+  std::string delete_email_response = delete_kvs("127.0.0.1", 7000, "email_" + username, message_id + ".txt");
+  std::cerr << "Delete email response: " << delete_email_response << std::endl;
+  
   std::string init_response = req_init_line->version + " 200 OK\r\n";
   std::string message_body = "Message deleted successfully.";
   std::string headers = "";
