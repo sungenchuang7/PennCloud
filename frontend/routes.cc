@@ -1557,7 +1557,7 @@ std::tuple<std::string, std::string, std::string> download_file(ReqInitLine *req
   // get username from cookie 
   std::string username = usernames[sid];
   // get the path name from the url 
-  std::string file_path = req_init_line->path.substr(8);
+  std::string file_path = req_init_line->path.substr(9);
 
   // open metadata file 
   std::string metadata = get_kvs("127.0.0.1", 7000, "file_" + username, "metadata.txt");
@@ -1569,13 +1569,12 @@ std::tuple<std::string, std::string, std::string> download_file(ReqInitLine *req
   int col_ind = temp.find(":");
   int end_ind = temp.find("\n");
   std::string uuid = temp.substr(col_ind + 1, end_ind - col_ind - 1) + ".txt";
-  fprintf(stderr, "metadata: %s\n", metadata.c_str());
 
   // open file
   std::string file_data = get_kvs("127.0.0.1", 7000, "file_" + username, uuid);
   // parse file for data
-  int data_index = file_data.find("data:\n");
-  file_data = file_data.substr(data_index + 6);
+  int data_index = file_data.find("data:");
+  file_data = file_data.substr(data_index + 5);
   fprintf(stderr, "file_data: %s\n", file_data.c_str());
 
   int last_index = file_path.find_last_of("/");
@@ -1589,7 +1588,8 @@ std::tuple<std::string, std::string, std::string> download_file(ReqInitLine *req
   headers += "Content-Disposition: attachment; filename=" + file_name + "\r\n";
   int split_ind = file_data.find("\r\n");
   std::string next_header = file_data.substr(0, split_ind + 2);
-  std::string data = file_data.substr(split_ind + 2);
+  std::string data = file_data.substr(split_ind + 4);
+  headers += "Content-Length: " + std::to_string(data.length()) + "\r\n";
   headers += next_header;
   message_body = data;
 
