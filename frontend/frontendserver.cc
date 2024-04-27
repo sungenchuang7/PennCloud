@@ -286,6 +286,10 @@ void *connection_thread(void *args)
         {
           std::tuple<std::string, std::string, std::string> response = get_file(req_init_line, headers);
           send_response(fd, thread_no, std::get<0>(response), std::get<1>(response), std::get<2>(response));
+        } else if (req_init_line->path.find("/download") != std::string::npos)
+        {
+          std::tuple<std::string, std::string, std::string> response = download_file(req_init_line, headers);
+          send_response(fd, thread_no, std::get<0>(response), std::get<1>(response), std::get<2>(response));
         }
         else
         {

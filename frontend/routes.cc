@@ -1532,3 +1532,67 @@ std::tuple<std::string, std::string, std::string> post_file(ReqInitLine *req_ini
   return std::make_tuple(init_response, headers, message_body);
 }
 
+std::tuple<std::string, std::string, std::string> download_file(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers) {
+  // Check if user is logged in (auth_token=sid)
+  if (req_headers.find("Cookie") == req_headers.end())
+  {
+    std::string init_response = req_init_line->version + " 401 Unauthorized\r\n";
+    std::string message_body = "You must be logged in to view this page.";
+    std::string headers = "";
+    headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
+    return std::make_tuple(init_response, headers, message_body);
+  }
+
+  std::unordered_map<std::string, std::string> cookies = parse_cookies(req_headers["Cookie"]);
+  if (cookies.find("auth_token") == cookies.end() || cookies["auth_token"] != cookies["sid"])
+  {
+    std::string init_response = req_init_line->version + " 401 Unauthorized\r\n";
+    std::string message_body = "You must be logged in to view this page.";
+    std::string headers = "";
+    headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
+    return std::make_tuple(init_response, headers, message_body);
+  }
+  // Get user sid cookie value
+  std::string sid = cookies["sid"];
+  // get username from cookie 
+  std::string username = usernames[sid];
+  // get the path name from the url 
+  std::string file_path = req_init_line->path.substr(8);
+
+  // open metadata file 
+  std::string metadata = get_kvs("127.0.0.1", 7000, "file_" + username, "metadata.txt");
+
+  // parse metadata file for the uuid of the file
+  std::string searchable = file_path + ":";
+  int ind = metadata.find(searchable);
+  std::string temp = metadata.substr(ind);
+  int col_ind = temp.find(":");
+  int end_ind = temp.find("\n");
+  std::string uuid = temp.substr(col_ind + 1, end_ind - col_ind - 1) + ".txt";
+  fprintf(stderr, "metadata: %s\n", metadata.c_str());
+
+  // open file
+  std::string file_data = get_kvs("127.0.0.1", 7000, "file_" + username, uuid);
+  // parse file for data
+  int data_index = file_data.find("data:\n");
+  file_data = file_data.substr(data_index + 6);
+  fprintf(stderr, "file_data: %s\n", file_data.c_str());
+
+  int last_index = file_path.find_last_of("/");
+  std::string file_name = file_path.substr(last_index + 1);
+  fprintf(stderr, "file_name: %s\n", file_name.c_str());
+
+  std::string message_body = "";
+  std::string init_response = req_init_line->version + " 200 OK\r\n";
+  std::string headers = "";
+
+  headers += "Content-Disposition: attachment; filename=" + file_name + "\r\n";
+  int split_ind = file_data.find("\r\n");
+  std::string next_header = file_data.substr(0, split_ind + 2);
+  std::string data = file_data.substr(split_ind + 2);
+  headers += next_header;
+  message_body = data;
+
+  return std::make_tuple(init_response, headers, message_body);
+}
+
