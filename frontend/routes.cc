@@ -1451,86 +1451,84 @@ std::tuple<std::string, std::string, std::string> post_file(ReqInitLine *req_ini
     return std::make_tuple(init_response, headers, message_body);
   }
 
-  // std::unordered_map<std::string, std::string> body_map = parse_post_body(body);
-  // for (auto & t : body_map) {
-  //   std::cerr << "key: " << t.first << "value: " << t.second << "\n";
-  // }
+  // parse request for file data 
+  int file_index = body.find("Content-Disposition: form-data; name=\"filename\"");
+  std::string temp = body.substr(file_index);
+  // get the file name 
+  int name_index = temp.find("filename=");
+  int end_name_index = temp.find("\r\n");
+  std::string file_name = temp.substr(name_index + 10, end_name_index - name_index - 9);
+  // remove end quotation mark on file name 
+  int quote_index = file_name.find("\"");
+  file_name = file_name.substr(0, quote_index);
 
-  // // Get message_id from path
+  // get important file info 
+  int content_index = temp.find("Content-Type:");
+  temp = temp.substr(content_index);
+  // parse out extraneous info 
+  int extra_index = temp.find("---");
+  std::string file_info = temp.substr(0, extra_index);
 
-  // // Get user sid cookie value
-  // std::string sid = cookies["sid"];
-  // // get username from cookie 
-  // std::string username = usernames[sid];
+  // get the path name from the url 
+  std::string file_path = req_init_line->path.substr(7);
 
-  // // Get path of folder 
-  // std::string file_path = req_init_line->path.substr(5);
-  // int slash_ind = file_path.find("/");
-  // std::string file_name = file_path;
-  // while (slash_ind != std::string::npos) {
-  //   file_name = file_name.substr(slash_ind + 1);
-  //   slash_ind = file_name.find("/");
-  // }
+  std::string new_file_name = file_path + file_name;
+  fprintf(stderr, "new file name: %s\n", new_file_name.c_str());
+
+  // Get user sid cookie value
+  std::string sid = cookies["sid"];
+  // get username from cookie 
+  std::string username = usernames[sid];
+  fprintf(stderr, "username: %s\n", username.c_str());
+
+  // open metadata file 
+  std::string metadata = get_kvs("127.0.0.1", 7000, "file_" + username, "metadata.txt");
+  fprintf(stderr, "metadata: %s\n", metadata.c_str());
+
+  // parse metadata file for the uuid of the folder
+  std::string searchable = file_path + ":";
+  int ind = metadata.find(searchable);
+  temp = metadata.substr(ind);
+  int col_ind = temp.find(":");
+  int end_ind = temp.find("\n");
+  std::string uuid = temp.substr(col_ind + 1, end_ind - col_ind - 1) + ".txt";
+  fprintf(stderr, "uuid: %s\n", uuid.c_str());
+
+  // use uuid to get folder data
+  std::string folder_data = get_kvs("127.0.0.1", 7000, "file_" + username, uuid);
+  fprintf(stderr, "folder_data: %s\n", folder_data.c_str());
   
-  // // TODO: test this
-  // // query backend for the uuid of this folder
-  // std::string metadata = get_kvs("127.0.0.1", 7000, "file_" + username, "metadata.txt");
+  // update folder_data string to include new file in children files 
+  int curr_ind = folder_data.find("children_folders:\n");
+  std::string prefolder = folder_data.substr(0, curr_ind); 
+  std::string postfolder = folder_data.substr(curr_ind);
+  std::string new_folder_data = prefolder + file_name + "\n" + postfolder; 
+  fprintf(stderr, "new_folder_data: %s\n", new_folder_data.c_str());
+  // TODO: handle if this doesn't work later
+  std::string command = put_kvs("127.0.0.1", 7000, "file_" + username, uuid, new_folder_data, true, folder_data);
 
-  // // parse metadata file for the uuid of the folder
-  // std::string searchable = file_path + ":";
-  // int ind = metadata.find(searchable);
-  // std::string temp = metadata.substr(ind);
-  // int col_ind = temp.find(":");
-  // int end_ind = temp.find("\n");
-  // std::string uuid = temp.substr(col_ind + 1, end_ind - col_ind - 1) + ".txt";
+  // now, access next_uuid to get a uuid for this new file 
+  std::string next_uuid = get_kvs("127.0.0.1", 7000, "file_" + username, "nextid.txt");
+  int new_uuid = std::stoi(next_uuid);
+  next_uuid = std::to_string(new_uuid + 1);
 
-  // // use uuid to get file data
-  // std::string file_data = get_kvs("127.0.0.1", 7000, "file_" + username, uuid);
+  //TODO: handle if this doesn't work later
+  command = put_kvs("127.0.0.1", 7000, "file_" + username, "nextid.txt", next_uuid, false, "");
 
-  // // parse file_data for actual data 
-  // int data_ind = temp.find("data:\n");
-  // std::string data = file_data.substr(data_ind + 6);
+  // now, edit metadata file to contain mapping of file path to this uuid 
+  std::string new_metadata = metadata + new_file_name + ":" + std::to_string(new_uuid) + "\n";
+  // TODO: handle if this doesn't work later 
+  command = put_kvs("127.0.0.1", 7000, "file_" + username, "metadata.txt", new_metadata, true, metadata);
 
-  // // Create response and send HTML
-  // std::ifstream file(STATICS_LOC + "file.html");
-  // std::string message_body;
+  // finally, create the new file 
+  command = put_kvs("127.0.0.1", 7000, "file_" + username, std::to_string(new_uuid) + ".txt", "is_directory:false\nparent:" + uuid +"\ndata:" + file_info, false, "");
 
-  // if (file.is_open())
-  // {
-  //   std::string line;
-  //   while (getline(file, line))
-  //   {
-  //     message_body += line + "\n";
-  //   }
-  //   file.close();
-  // }
-  // else
-  // {
-  //   std::string response = req_init_line->version + " 404 Not Found\r\n";
-  //   return std::make_tuple(response, "", "");
-  // }
+  std::string message_body = "";
+  std::string init_response = req_init_line->version + " 303 Success\r\n";
+  std::string headers = "";
+  headers += "Location: /storage\r\n";
+  headers += "Content-Length: 0\r\n"; // Need this header on all post responses
 
-  // // Insert message into HTML
-  // std::string insert_tag = "<!-- Insert file name here using c++ code-->";
-  // int insert_index = message_body.find(insert_tag);
-  // std::string name_html = "\n<h1>";
-  // name_html += file_name;
-  // name_html += "</h1>";
-  // message_body.insert(insert_index + insert_tag.length(), name_html);
-
-  // // Create inital response line
-  // std::string init_response = req_init_line->version + " 200 OK\r\n";
-
-  // // Create headers
-  // std::string headers;
-  // // TODO: Date header
-
-  // // Content Type header
-  // headers += "Content-Type: text/html\r\n";
-
-  // // Content Length header
-  // headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
-  // return std::make_tuple(init_response, headers, message_body);
-  return std::make_tuple("idk", "idk", "idk");
+  return std::make_tuple(init_response, headers, message_body);
 }
 

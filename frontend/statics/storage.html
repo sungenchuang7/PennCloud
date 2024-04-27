@@ -14,7 +14,7 @@
     <br><br>
     <!-- form to upload a new file -->
     <h3>Upload</h3>
-    <form action="/upload" method="post" enctype="multipart/form-data">
+    <form action="/upload" method="post" enctype="multipart/form-data" id="form">
         <label for="file">File: </label>
         <input type="file" id="file" name="filename" required>
         <br><br>
@@ -43,7 +43,7 @@
         //     { file_id: "hijk", is_directory: false, name: "weeee3" }
         // ];
 
-        function displayFiles() {
+        function onLoad() {
             const fileListElement = document.getElementById('fileList');
             files.forEach(file => {
                 const listItem = document.createElement('li');
@@ -59,9 +59,19 @@
                     </a>`;
                 fileListElement.appendChild(listItem);
             });
+
+            const formElement = document.getElementById('form');
+            const currentURL = document.URL;
+            // TODO: I'm hardcoding it right now for some reason lol
+            let storage_index = currentURL.search("storage");
+            let path = currentURL.substring(storage_index + 7);
+            if (path == "") {
+              path = "/";
+            }
+            formElement.setAttribute('action', `/upload${path}`);
         }
 
-        window.onload = displayFiles;
+        window.onload = onLoad;
     </script>
 </body>
 
