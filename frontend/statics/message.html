@@ -1,10 +1,33 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Penn Cloud</title>
+    <style>
+        .modal {
+            display: none;
+            position: fixed;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            width: 300px;
+            padding: 20px;
+            background-color: #fefefe;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+        }
+
+        .modal-content {
+            background-color: #fefefe;
+            margin: auto;
+            padding: 20px;
+            border: 1px solid #888;
+            width: 80%;
+        }
+    </style>
 </head>
+
 <body>
     <div class="email-container">
         <!-- Insert message here using c++ code -->
@@ -13,8 +36,17 @@
         <button id="forward-btn">Forward</button>
     </div>
 
+    <!-- Modal -->
+    <div id="modal" class="modal">
+        <div class="modal-content">
+            <p>Modal text</p>
+            <button id="closeModalBtn">Close</button>
+        </div>
+
+    </div>
+
     <script>
-        document.getElementById('delete-btn').addEventListener('click', function() {
+        document.getElementById('delete-btn').addEventListener('click', function () {
             const currentURL = window.location.href;
             const lastIndex = currentURL.lastIndexOf('/');
             const stringAfterLastSlash = currentURL.substring(lastIndex + 1);
@@ -22,37 +54,45 @@
             const options = {
                 method: 'POST',
                 headers: {
-                'Content-Type': 'text/plain'
+                    'Content-Type': 'text/plain'
                 },
                 body: bodyData
             };
 
             fetch('/delete-email', options)
                 .then(response => {
-                if (!response.ok) {
-                    throw new Error('Response was not ok');
-                }
-                return response;
+                    if (!response.ok) {
+                        throw new Error('Response was not ok');
+                    }
+                    return response;
                 })
                 .then(data => {
-                console.log('POST request successful', data);
-                alert('Message deleted sucessfully');
+                    console.log('POST request successful', data);
+                    document.getElementById('modal').innerText = "Message deleted sucessfully.\nClick to go back to inbox.";
+                    document.getElementById("modal").style.display = "block";
                 })
                 .catch(error => {
-                console.error('There was a problem with the POST request:', error);
-                alert('Error in deleting message. Please try again.');
+                    console.error('There was a problem with the POST request:', error);
+                    alert('Error in deleting message. Please try again.');
                 });
         });
 
-        document.getElementById('reply-btn').addEventListener('click', function() {
+        document.getElementById('reply-btn').addEventListener('click', function () {
             // TODO: Implement reply
             alert('Replying to email...');
         });
 
-        document.getElementById('forward-btn').addEventListener('click', function() {
+        document.getElementById('forward-btn').addEventListener('click', function () {
             // TODO: Implement forward
             alert('Forwarding email...');
         });
+        var modal = document.getElementById("modal");
+        window.onclick = function (event) {
+            if (event.target == modal) {
+                window.location.href = "/inbox";
+            }
+        }
     </script>
 </body>
+
 </html>

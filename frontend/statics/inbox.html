@@ -5,6 +5,27 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Penn Cloud</title>
+    <style>
+        .modal {
+            display: none;
+            position: fixed;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            width: 300px;
+            padding: 20px;
+            background-color: #fefefe;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+        }
+
+        .modal-content {
+            background-color: #fefefe;
+            margin: auto;
+            padding: 20px;
+            border: 1px solid #888;
+            width: 80%;
+        }
+    </style>
 </head>
 
 <body>
@@ -13,8 +34,8 @@
     <br><br>
     <!-- form to write a new email -->
     <h3>New Message</h3>
-    <form action="/send" method="post">
-        <label for="recipient">Recipient:</label>
+    <form id="new-email-form" action="/send" method="post">
+        <label for="recipient">Recipient(s):</label>
         <input type="text" id="recipient" name="recipient" required>
         <br><br>
         <label for="subject">Subject:</label>
@@ -24,39 +45,84 @@
         <textarea id="message" name="message" required></textarea>
         <br><br>
         <input type="submit" value="Send">
-    <br><br>
-    <h3>Your Messages</h3>
-    <ul id="emailList">
-        <!-- email html elements here -->
-    </ul>
+        <!-- Modal -->
+        <div id="modal" class="modal">
+            <div class="modal-content">
+                <p>Modal text</p>
+                <button id="closeModalBtn">Close</button>
+            </div>
 
-    <script>
+        </div>
+        <br><br>
 
-        // const emails list will be added here with c++ code
-        // EXAMPLE:
-        // const emails = [
-        //     { message_id: "abcd", subject: "Subject 1", sender: "user1@localhost", arrivalTime: "Sat Apr 13 00:00:00 2024" },
-        //     { message_id: "defg", subject: "Subject 2", sender: "user2@localhost", arrivalTime: "Sun Apr 14 00:00:00 2024" },
-        //     { message_id: "hijk", subject: "Subject 3", sender: "user3@localhost", arrivalTime: "Sun Apr 15 00:00:00 2024" }
-        // ];
+        <h3>Your Messages</h3>
+        <ul id="emailList">
+            <!-- email html elements here -->
+        </ul>
+        <script>
 
-        function displayEmails() {
-            const emailListElement = document.getElementById('emailList');
-            emails.forEach(email => {
-                const listItem = document.createElement('li');
-                listItem.innerHTML = `
+            // const emails list will be added here with c++ code
+            // EXAMPLE:
+            // const emails = [
+            //     { message_id: "abcd", subject: "Subject 1", sender: "user1@localhost", arrivalTime: "Sat Apr 13 00:00:00 2024" },
+            //     { message_id: "defg", subject: "Subject 2", sender: "user2@localhost", arrivalTime: "Sun Apr 14 00:00:00 2024" },
+            //     { message_id: "hijk", subject: "Subject 3", sender: "user3@localhost", arrivalTime: "Sun Apr 15 00:00:00 2024" }
+            // ];
+
+            function displayEmails() {
+                const emailListElement = document.getElementById('emailList');
+                emails.forEach(email => {
+                    const listItem = document.createElement('li');
+                    listItem.innerHTML = `
                     <a href="/inbox/${email.message_id}">
                         <strong>${email.subject}</strong><br>
                     </a>
                         From: ${email.sender}<br>
                         Arrival Time: ${email.arrival_time}
                 `;
-                emailListElement.appendChild(listItem);
-            });
-        }
+                    emailListElement.appendChild(listItem);
+                });
+            }
 
-        window.onload = displayEmails;
-    </script>
+            window.onload = displayEmails;
+
+            document.addEventListener('DOMContentLoaded', function () {
+                document.getElementById('new-email-form').addEventListener('submit', function (e) {
+                    e.preventDefault();
+
+                    var formData = new URLSearchParams(new FormData(this))
+
+                    fetch('/send', {
+                        method: 'POST',
+                        body: formData
+                    })
+                        .then(response => {
+                            if (!response.ok) {
+                                document.getElementById('modal').innerText = response.text() + "\nClick to close.";
+                                document.getElementById("modal").style.display = "block";
+                                throw new Error('Response was not ok');
+                            }
+                            return response.text();
+                        })
+                        .then(responseText => {
+                            document.getElementById('modal').innerText = responseText + "\nClick to close.";
+                            document.getElementById("modal").style.display = "block";
+                        })
+                        .catch(error => {
+                            console.error('There was a problem with POST /send', error);
+                        });
+                    document.getElementById('new-email-form').reset();
+                });
+            });
+
+            var modal = document.getElementById("modal");
+            window.onclick = function (event) {
+                if (event.target == modal) {
+                    modal.style.display = "none";
+                    window.location.reload();
+                }
+            }
+        </script>
 </body>
 
 </html>

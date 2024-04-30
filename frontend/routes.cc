@@ -21,6 +21,7 @@
 #include <iomanip>
 #include <uuid/uuid.h>
 #include <openssl/md5.h>
+#include <algorithm>
 
 std::string STATICS_LOC = "./statics/";
 int MAX_BUFF_SIZE = 1000;
@@ -790,6 +791,13 @@ std::tuple<std::string, std::string, std::string> get_inbox(ReqInitLine *req_ini
       emails[message_id] = {message_id, subject, sender, arrival_time};
     }
   }
+  
+  // Sort by arrival time
+  std::vector<std::pair<std::string, Email>> sorted_emails(emails.begin(), emails.end());
+  std::sort(sorted_emails.begin(), sorted_emails.end(), [](const std::pair<std::string, Email> &a, const std::pair<std::string, Email> &b) {
+    return a.second.arrival_time > b.second.arrival_time;
+  });
+  
   // Map of email messages {message_id, subject, sender, arrival_time}
   // std::unordered_map<std::string, Email> emails = {
   //     {"message1", {"message1", "Subject 1", "user1@localhost", "Sat Apr 13 00:00:00 2024"}},
@@ -819,7 +827,7 @@ std::tuple<std::string, std::string, std::string> get_inbox(ReqInitLine *req_ini
   std::string insert_tag = "<script>";
   int insert_index = message_body.find(insert_tag);
   std::string email_script = "\nconst emails = [\n";
-  for (auto const &email : emails)
+  for (auto const &email : sorted_emails)
   {
     email_script += "{";
     email_script += "message_id: \"" + email.second.message_id + "\",";
@@ -910,7 +918,17 @@ std::tuple<std::string, std::string, std::string> get_inbox_message(ReqInitLine 
   std::string insert_tag = "<div class=\"email-container\">";
   int insert_index = message_body.find(insert_tag);  
   std::string email_html = "\n<p>";
-  email_html += message;
+  for (int i = 0; i < message.length(); i++)
+  {
+    if (message[i] == '\n')
+    {
+      email_html += "<br>";
+    }
+    else
+    {
+      email_html += message[i];
+    }
+  }
   email_html += "</p>";
   message_body.insert(insert_index + insert_tag.length(), email_html);
 
