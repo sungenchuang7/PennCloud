@@ -917,7 +917,7 @@ std::tuple<std::string, std::string, std::string> get_inbox_message(ReqInitLine 
   // Insert message into HTML
   std::string insert_tag = "<div class=\"email-container\">";
   int insert_index = message_body.find(insert_tag);  
-  std::string email_html = "\n<p>";
+  std::string email_html = "\n<p id=\"email-text\">";
   for (int i = 0; i < message.length(); i++)
   {
     if (message[i] == '\n')
@@ -1185,13 +1185,13 @@ std::tuple<std::string, std::string, std::string> post_delete_message(ReqInitLin
   return std::make_tuple(init_response, headers, message_body);
 }
 
-// TODO: Reply to a message
+// Reply to a message (uses post send)
 std::tuple<std::string, std::string, std::string> post_reply_message(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body)
 {
   return std::make_tuple("", "", "");
 }
 
-// TODO: Forward a message
+// Forward a message (uses post send)
 std::tuple<std::string, std::string, std::string> post_forward_message(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body)
 {
   return std::make_tuple("", "", "");

@@ -29,11 +29,36 @@
 </head>
 
 <body>
+    <a href="/inbox">Back to Inbox</a>
     <div class="email-container">
         <!-- Insert message here using c++ code -->
-        <button id="delete-btn">Delete</button>
-        <button id="reply-btn">Reply</button>
-        <button id="forward-btn">Forward</button>
+        <button id="delete-btn">Delete Message</button>
+        <h3>Reply to the message</h3>
+        <form id="reply-form" action="/send" method="post">
+            <label for="recipient-reply">Recipient:</label>
+            <input type="text" id="recipient-reply" name="recipient" readonly>
+            <br><br>
+            <label for="subject-reply">Subject:</label>
+            <input type="text" id="subject-reply" name="subject" readonly>
+            <br><br>
+            <label for="message-reply">Message:</label>
+            <textarea id="message-reply" name="message" required></textarea>
+            <br><br>
+            <input type="submit" value="Reply">
+        </form>
+        <h3>Forward the message</h3>
+        <form id="forward-form" action="/send" method="post">
+            <label for="recipient-fwd">Recipient(s):</label>
+            <input type="text" id="recipient-fwd" name="recipient" required>
+            <br><br>
+            <label for="subject-fwd">Subject:</label>
+            <input type="text" id="subject-fwd" name="subject" readonly>
+            <br><br>
+            <label for="message-fwd">Message:</label>
+            <textarea id="message-fwd" name="message" readonly></textarea>
+            <br><br>
+            <input type="submit" value="Forward">
+        </form>
     </div>
 
     <!-- Modal -->
@@ -76,15 +101,57 @@
                     alert('Error in deleting message. Please try again.');
                 });
         });
+        document.addEventListener('DOMContentLoaded', function () {
+            document.getElementById('reply-form').addEventListener('submit', function (e) {
+                e.preventDefault();
+                console.log("Replying")
+                var formData = new URLSearchParams(new FormData(this))
 
-        document.getElementById('reply-btn').addEventListener('click', function () {
-            // TODO: Implement reply
-            alert('Replying to email...');
-        });
+                fetch('/send', {
+                    method: 'POST',
+                    body: formData
+                })
+                    .then(response => {
+                        if (!response.ok) {
+                            document.getElementById('modal').innerText = response.text() + "\nClick to go back to inbox.";
+                            document.getElementById("modal").style.display = "block";
+                            throw new Error('Response was not ok');
+                        }
+                        return response.text();
+                    })
+                    .then(responseText => {
+                        document.getElementById('modal').innerText = "Reply successful! \nClick to go back to inbox.";
+                        document.getElementById("modal").style.display = "block";
+                    })
+                    .catch(error => {
+                        console.error('There was a problem with POST /send in replying function', error);
+                    });
+            });
+            document.getElementById('forward-form').addEventListener('submit', function (e) {
+                e.preventDefault();
+                console.log("Forwarding")
+                var formData = new URLSearchParams(new FormData(this))
 
-        document.getElementById('forward-btn').addEventListener('click', function () {
-            // TODO: Implement forward
-            alert('Forwarding email...');
+                fetch('/send', {
+                    method: 'POST',
+                    body: formData
+                })
+                    .then(response => {
+                        if (!response.ok) {
+                            document.getElementById('modal').innerText = response.text() + "\nClick to go back to inbox.";
+                            document.getElementById("modal").style.display = "block";
+                            throw new Error('Response was not ok');
+                        }
+                        return response.text();
+                    })
+                    .then(responseText => {
+                        document.getElementById('modal').innerText = "Forward successful! \nClick to go back to inbox.";
+                        document.getElementById("modal").style.display = "block";
+                    })
+                    .catch(error => {
+                        console.error('There was a problem with POST /send in forwarding function', error);
+                    });
+            });
         });
         var modal = document.getElementById("modal");
         window.onclick = function (event) {
@@ -92,6 +159,24 @@
                 window.location.href = "/inbox";
             }
         }
+
+        // Fill in the recipient and subject fields for reply form
+        var email_text = document.getElementById('email-text').innerText;
+        var from_regex = /FROM:\s*([^\n\r]*)/;
+        var subject_regex = /SUBJECT:\s*([^\n\r]*)/;
+        var message_regex = /MESSAGE:\s*([^\n\r]*)/;
+
+        var from = from_regex.exec(email_text)[1];
+        var subject = subject_regex.exec(email_text)[1];
+        var message = message_regex.exec(email_text)[1];
+
+        document.getElementById('recipient-reply').value = from;
+        document.getElementById('subject-reply').value = "RE: " + subject;
+
+        // Fill in the subject and message fields for forward form
+        document.getElementById('subject-fwd').value = "FWD: " + subject;
+        document.getElementById('message-fwd').value = message;
+
     </script>
 </body>
 
