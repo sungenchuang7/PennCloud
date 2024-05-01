@@ -594,7 +594,6 @@ std::tuple<std::string, std::string, std::string> get_index(ReqInitLine *req_ini
 
   // Create headers
   std::string headers;
-  // TODO: Date header
 
   // Content Type header
   headers += "Content-Type: text/html\r\n";
@@ -645,7 +644,6 @@ std::tuple<std::string, std::string, std::string> get_signup(ReqInitLine *req_in
 
   // Create headers
   std::string headers;
-  // TODO: Date header
 
   // Content Type header
   headers += "Content-Type: text/html\r\n";
@@ -703,7 +701,6 @@ std::tuple<std::string, std::string, std::string> get_home(ReqInitLine *req_init
 
   // Create headers
   std::string headers;
-  // TODO: Date header
 
   // Content Type header
   headers += "Content-Type: text/html\r\n";
@@ -1466,7 +1463,6 @@ std::tuple<std::string, std::string, std::string> get_file(ReqInitLine *req_init
 
   // Create headers
   std::string headers;
-  // TODO: Date header
 
   // Content Type header
   headers += "Content-Type: text/html\r\n";
