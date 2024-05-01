@@ -1709,13 +1709,20 @@ std::tuple<std::string, std::string, std::string> download_file(ReqInitLine *req
   std::string init_response = req_init_line->version + " 200 OK\r\n";
   std::string headers = "";
 
-  headers += "Content-Disposition: attachment; filename=" + file_name + "\r\n";
+  headers += "Content-Disposition: attachment; filename=\"" + file_name + "\"\r\n";
   int split_ind = file_data.find("\r\n");
-  std::string next_header = file_data.substr(0, split_ind + 2);
+  std::string next_header = file_data.substr(0, split_ind);
   std::string data = file_data.substr(split_ind + 4);
+  // get rid of any extra \r\n's
+  int cut_ind = data.find("\r\n");
+  data = data.substr(0, cut_ind);
+
   headers += "Content-Length: " + std::to_string(data.length()) + "\r\n";
-  headers += next_header;
+  headers += next_header + "\r\n";
+  // headers += "Content-Type: application/octet-stream\r\n";
+  headers += "Date: Mon, 29 Apr 2024 22:14:46 GMT\r\n";
   message_body = data;
+  fprintf(stderr, "data: %s", data.c_str());
 
   return std::make_tuple(init_response, headers, message_body);
 }
