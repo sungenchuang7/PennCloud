@@ -953,6 +953,44 @@ std::tuple<std::string, std::string, std::string> get_inbox_message(ReqInitLine 
   return std::make_tuple(init_response, headers, message_body);
 }
 
+std::tuple<std::string, std::string, std::string> get_change_password(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers)
+{
+  // TODO: Add check for if logged out
+  // Read in HTML file
+  std::ifstream file(STATICS_LOC + "changepass.html");
+  std::string message_body;
+
+  if (file.is_open())
+  {
+    std::string line;
+    while (getline(file, line))
+    {
+      message_body += line + "\n";
+    }
+    file.close();
+  }
+  else
+  {
+    std::string response = req_init_line->version + " 404 Not Found\r\n";
+    return std::make_tuple(response, "", "");
+  }
+
+  // Create inital response line
+  std::string init_response = req_init_line->version + " 200 OK\r\n";
+
+  // Create headers
+  std::string headers;
+
+  // Content Type header
+  headers += "Content-Type: text/html\r\n";
+
+  // Content Length header
+  headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
+
+  // Return response
+  return std::make_tuple(init_response, headers, message_body);
+}
+
 // FRONTEND POST ROUTES
 
 // Returns map of post body {key, value}
@@ -1223,6 +1261,49 @@ std::tuple<std::string, std::string, std::string> post_forward_message(ReqInitLi
   return std::make_tuple("", "", "");
 }
 
+std::tuple<std::string, std::string, std::string> post_change_password(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body)
+{
+  // Parse body for username and password
+  std::unordered_map<std::string, std::string> body_map = parse_post_body_url_encoded(body);
+
+  std::string username = body_map["username"];
+  std::string password = body_map["password"];
+
+  // Check that logged in user is the same user that is trying to change passsword
+  std::string sid = parse_cookies(req_headers["Cookie"])["sid"];
+  if (usernames[sid] != username)
+  {
+    std::string init_response = req_init_line->version + " 401 Unauthorized\r\n";
+    std::string message_body = "You must be logged in as the user you are trying to change the password for.";
+    std::string headers = "";
+    headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
+    return std::make_tuple(init_response, headers, message_body);
+  }
+
+  // Update with new password
+  std::string put_metadata_response;
+  while (put_metadata_response != "+OK Value added")
+  {
+    // Ping backend master for backend server address
+    std::string backend_address_port = get_backend_address("user_" + username);
+    std::string backend_address = backend_address_port.substr(0, backend_address_port.find(":"));
+    int backend_port = std::stoi(backend_address_port.substr(backend_address_port.find(":") + 1));
+
+    std::string old_password = get_kvs(backend_address, backend_port, "user_" + username, "password.txt");
+    if (old_password.length()  <= 5 || old_password.length() > 5 && old_password.substr(0, 5) != "--ERR")
+    {
+      put_metadata_response = put_kvs(backend_address, backend_port, "user_" + username, "password.txt", password, true, old_password);
+    }   
+  }
+  
+  // Redirect to login page
+  std::string message_body = "";
+  std::string init_response = req_init_line->version + " 303 Found\r\n";
+  std::string headers = "";
+  headers += "Location: /\r\n";
+  headers += "Content-Length: 0\r\n";
+  return std::make_tuple(init_response, headers, message_body);
+}
 // File system functions
 // Get
 std::tuple<std::string, std::string, std::string> get_storage(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers)

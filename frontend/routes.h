@@ -18,6 +18,7 @@ std::tuple<std::string, std::string, std::string> get_signup(ReqInitLine *req_in
 std::tuple<std::string, std::string, std::string> get_home(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> headers);
 std::tuple<std::string, std::string, std::string> get_inbox(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers);
 std::tuple<std::string, std::string, std::string> get_inbox_message(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers);
+std::tuple<std::string, std::string, std::string> get_change_password(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers);
 
 // POST ROUTES
 std::tuple<std::string, std::string, std::string> post_login(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body);
@@ -26,6 +27,8 @@ std::tuple<std::string, std::string, std::string> post_delete_message(ReqInitLin
 std::tuple<std::string, std::string, std::string> post_reply_message(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body);
 std::tuple<std::string, std::string, std::string> post_forward_message(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body);
 std::tuple<std::string, std::string, std::string> post_signup(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body);
+std::tuple<std::string, std::string, std::string> post_change_password(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body);
+
 
 // inbox stuff 
 // GET ROUTES
