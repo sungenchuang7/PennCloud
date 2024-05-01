@@ -132,7 +132,6 @@ std::string get_backend_address(std::string rowkey)
   // Make INIT, request
   std::string request = "INIT," + rowkey + "\r\n";
   write(sock, request.c_str(), request.length());
-  std::cerr << "Sending INIT request" << std::endl;
   // Read response from server
   bzero(buffer, MAX_BUFF_SIZE);
   has_full_command = false;
@@ -141,7 +140,6 @@ std::string get_backend_address(std::string rowkey)
   while (!has_full_command)
   {
     char c;
-    std::cerr << "Waiting to read" << std::endl;
     if (read(sock, &c, 1) > 0)
     {
       buffer[end_index] = c;
@@ -276,7 +274,6 @@ std::string get_kvs(std::string ip, int port, std::string row, std::string col)
 // Returns error message if request fails
 std::string put_kvs(std::string ip, int port, std::string row, std::string col, std::string value, bool is_cput, std::string prev_value)
 {
-  // TODO: If (C)PUT or DATA fails, frontend should retry
   // Create socket connection with server
   int sock = socket(PF_INET, SOCK_STREAM, 0);
   struct sockaddr_in servaddr;
@@ -746,8 +743,13 @@ std::tuple<std::string, std::string, std::string> get_inbox(ReqInitLine *req_ini
   std::string username = usernames[sid];
   std::cerr << "Username: " << username << std::endl;
 
+  // Ping backend master for backend server address
+  std::string backend_address_port = get_backend_address("user_" + username);
+  std::string backend_address = backend_address_port.substr(0, backend_address_port.find(":"));
+  int backend_port = std::stoi(backend_address_port.substr(backend_address_port.find(":") + 1));
+
   // Get email metadata
-  std::string email_metadata = get_kvs("127.0.0.1", 7000, "email_" + username, "metadata.txt");
+  std::string email_metadata = get_kvs(backend_address, backend_port, "email_" + username, "metadata.txt");
   std::cerr << "Email metadata: " << email_metadata << std::endl;
   std::unordered_map<std::string, Email> emails = {};
 
@@ -758,8 +760,12 @@ std::tuple<std::string, std::string, std::string> get_inbox(ReqInitLine *req_ini
   {
     if (message_id != "Metadata")
     {
+      // Ping backend master for backend server address
+      std::string backend_address_port = get_backend_address("user_" + username);
+      std::string backend_address = backend_address_port.substr(0, backend_address_port.find(":"));
+      int backend_port = std::stoi(backend_address_port.substr(backend_address_port.find(":") + 1));
       std::cerr << "Message ID: " << message_id << std::endl;
-      std::string email_data = get_kvs("127.0.0.1", 7000, "email_" + username, message_id + ".txt");
+      std::string email_data = get_kvs(backend_address, backend_port, "email_" + username, message_id + ".txt");
       std::cerr << "Email data: " << email_data << std::endl;
       std::istringstream ss(email_data);
       std::string line, arrival_time, sender, recipient, subject, message;
@@ -884,7 +890,11 @@ std::tuple<std::string, std::string, std::string> get_inbox_message(ReqInitLine 
   std::string sid = cookies["sid"];
   std::string username = usernames[sid];
   std::cerr << "Username: " << username << std::endl;
-  std::string message = get_kvs("127.0.0.1", 7000, "email_" + username, message_id + ".txt");
+  // Ping backend master for backend server address
+  std::string backend_address_port = get_backend_address("user_" + username);
+  std::string backend_address = backend_address_port.substr(0, backend_address_port.find(":"));
+  int backend_port = std::stoi(backend_address_port.substr(backend_address_port.find(":") + 1));
+  std::string message = get_kvs(backend_address, backend_port, "email_" + username, message_id + ".txt");
   std::cerr << "Message: " << message << std::endl;
   if (message.find("--ERR") == 0)
   {
@@ -996,13 +1006,12 @@ std::tuple<std::string, std::string, std::string> post_login(ReqInitLine *req_in
   std::string password = body_map["password"];
 
   // Ping backend master for backend server address
-  // std::string backend_address_port = get_backend_address("user_" + username);
-  // std::string backend_address = backend_address_port.substr(0, backend_address_port.find(":"));
-  // int backend_port = std::stoi(backend_address_port.substr(backend_address_port.find(":") + 1));
+  std::string backend_address_port = get_backend_address("user_" + username);
+  std::string backend_address = backend_address_port.substr(0, backend_address_port.find(":"));
+  int backend_port = std::stoi(backend_address_port.substr(backend_address_port.find(":") + 1));
 
   // Check if username and password are correct
-  // std::string command = get_kvs(backend_address, backend_port, "user_" + username, "password.txt");
-  std::string command = get_kvs("127.0.0.1", 7000, "user_" + username, "password.txt");
+  std::string command = get_kvs(backend_address, backend_port, "user_" + username, "password.txt");
 
   if (password != command)
   {
@@ -1037,24 +1046,26 @@ std::tuple<std::string, std::string, std::string> post_signup(ReqInitLine *req_i
   std::string username = body_map["username"];
   std::string password = body_map["password"];
 
-  // TODO: ping backend master for backend server address
-  // std::string backend_address = get_backend_address("user_" + username);
+  // Ping backend master for backend server address
+  std::string backend_address_port = get_backend_address("user_" + username);
+  std::string backend_address = backend_address_port.substr(0, backend_address_port.find(":"));
+  int backend_port = std::stoi(backend_address_port.substr(backend_address_port.find(":") + 1));
   
   // create user file 
-  std::string command = put_kvs("127.0.0.1", 7000, "user_" + username, "password.txt", password, false, "");
+  std::string command = put_kvs(backend_address, backend_port, "user_" + username, "password.txt", password, false, "");
 
   // TODO: handle error 
 
   // after creating user file, also create metadata files for file and email
   // create email metadata file
-  command = put_kvs("127.0.0.1", 7000, "email_" + username, "metadata.txt", "Metadata\n", false, ""); // Need to send non empty value
+  command = put_kvs(backend_address, backend_port, "email_" + username, "metadata.txt", "Metadata\n", false, ""); // Need to send non empty value
   // TODO: handle error 
   // create file metadata file, and set home directory / to uuid 1
-  command = put_kvs("127.0.0.1", 7000, "file_" + username, "metadata.txt", "/:1\n", false, "");
+  command = put_kvs(backend_address, backend_port, "file_" + username, "metadata.txt", "/:1\n", false, "");
   // create next id column
-  command = put_kvs("127.0.0.1", 7000, "file_" + username, "nextid.txt", "2", false, "");
+  command = put_kvs(backend_address, backend_port, "file_" + username, "nextid.txt", "2", false, "");
   // create home directory
-  command = put_kvs("127.0.0.1", 7000, "file_" + username, "1.txt", "is_directory:true\nparent:0\nchildren_files:\nchildren_folders:\n", false, "");
+  command = put_kvs(backend_address, backend_port, "file_" + username, "1.txt", "is_directory:true\nparent:0\nchildren_files:\nchildren_folders:\n", false, "");
   
   std::string message_body = "";
   std::string init_response = req_init_line->version + " 303 Success\r\n";
@@ -1121,21 +1132,29 @@ std::tuple<std::string, std::string, std::string> post_send_message(ReqInitLine 
     // Make backend call to insert message into database only if the recipeint is a penncloud user
     if (recipient.find("@penncloud") != std::string::npos)
     {
+      // Ping backend master for backend server address
+      std::string backend_address_port = get_backend_address("user_" + username);
+      std::string backend_address = backend_address_port.substr(0, backend_address_port.find(":"));
+      int backend_port = std::stoi(backend_address_port.substr(backend_address_port.find(":") + 1));
+
       std::string recipient_remove_domain = recipient.substr(0, recipient.find("@"));
-      std::string put_email_response = put_kvs("127.0.0.1", 7000, "email_" + recipient_remove_domain, uidl + ".txt", email_str, false, "");
+      std::string put_email_response = put_kvs(backend_address, backend_port, "email_" + recipient_remove_domain, uidl + ".txt", email_str, false, "");
       // std::cerr << "Put email response: " << put_email_response << std::endl;
       // Run GET and CPUT until successful
       std::string put_metadata_response;
       while (put_metadata_response != "+OK Value added")
       {
+        backend_address_port = get_backend_address("user_" + username);
+        backend_address = backend_address_port.substr(0, backend_address_port.find(":"));
+        backend_port = std::stoi(backend_address_port.substr(backend_address_port.find(":") + 1));
         // std::cerr << "Recipient: " << recipient_remove_domain << std::endl;
-        std::string metadata = get_kvs("127.0.0.1", 7000, "email_" + recipient_remove_domain, "metadata.txt");
+        std::string metadata = get_kvs(backend_address, backend_port, "email_" + recipient_remove_domain, "metadata.txt");
         // std::cerr << "Get metadata response: " << metadata << std::endl;
         if (metadata.length()  <= 5 || metadata.length() > 5 && metadata.substr(0, 5) != "--ERR")
         {
-          put_metadata_response = put_kvs("127.0.0.1", 7000, "email_" + recipient_remove_domain, "metadata.txt", metadata + uidl + "\n", true, metadata);
+          put_metadata_response = put_kvs(backend_address, backend_port, "email_" + recipient_remove_domain, "metadata.txt", metadata + uidl + "\n", true, metadata);
           // std::cerr << "Put metadata response: " << put_metadata_response << std::endl;
-        }    
+        }   
       }
     }
   }
@@ -1164,18 +1183,28 @@ std::tuple<std::string, std::string, std::string> post_delete_message(ReqInitLin
   std::string put_metadata_response;
   while (put_metadata_response != "+OK Value added")
   {
-    std::string metadata = get_kvs("127.0.0.1", 7000, "email_" + username, "metadata.txt");
+    // Ping backend master for backend server address
+    std::string backend_address_port = get_backend_address("user_" + username);
+    std::string backend_address = backend_address_port.substr(0, backend_address_port.find(":"));
+    int backend_port = std::stoi(backend_address_port.substr(backend_address_port.find(":") + 1));
+
+    std::string metadata = get_kvs(backend_address, backend_port, "email_" + username, "metadata.txt");
     std::cerr << "Get metadata response: " << metadata << std::endl;
     if (metadata.length()  <= 5 || metadata.length() > 5 && metadata.substr(0, 5) != "--ERR")
     {
       std::string new_metadata = metadata.substr(0, metadata.find(message_id) - 1) + metadata.substr(metadata.find(message_id) + message_id.length());
-      put_metadata_response = put_kvs("127.0.0.1", 7000, "email_" + username, "metadata.txt", new_metadata, true, metadata);
+      put_metadata_response = put_kvs(backend_address, backend_port, "email_" + username, "metadata.txt", new_metadata, true, metadata);
       std::cerr << "Put metadata response: " << put_metadata_response << std::endl;
     }    
   }
 
+  // Ping backend master for backend server address
+  std::string backend_address_port = get_backend_address("user_" + username);
+  std::string backend_address = backend_address_port.substr(0, backend_address_port.find(":"));
+  int backend_port = std::stoi(backend_address_port.substr(backend_address_port.find(":") + 1));
+
   // Call delete on email message
-  std::string delete_email_response = delete_kvs("127.0.0.1", 7000, "email_" + username, message_id + ".txt");
+  std::string delete_email_response = delete_kvs(backend_address, backend_port, "email_" + username, message_id + ".txt");
   std::cerr << "Delete email response: " << delete_email_response << std::endl;
   
   std::string init_response = req_init_line->version + " 200 OK\r\n";
