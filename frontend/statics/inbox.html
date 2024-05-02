@@ -98,9 +98,7 @@
                     })
                         .then(response => {
                             if (!response.ok) {
-                                document.getElementById('modal').innerText = response.text() + "\nClick to close.";
-                                document.getElementById("modal").style.display = "block";
-                                throw new Error('Response was not ok');
+                                throw new Error('The recipent(s) do not have an account in penncloud.');
                             }
                             return response.text();
                         })
@@ -109,6 +107,8 @@
                             document.getElementById("modal").style.display = "block";
                         })
                         .catch(error => {
+                            document.getElementById('modal').innerText = error + "\nClick to close.";
+                            document.getElementById("modal").style.display = "block";
                             console.error('There was a problem with POST /send', error);
                         });
                     document.getElementById('new-email-form').reset();

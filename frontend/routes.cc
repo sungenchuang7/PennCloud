@@ -1148,7 +1148,7 @@ std::tuple<std::string, std::string, std::string> post_send_message(ReqInitLine 
     std::string username = usernames[parse_cookies(req_headers["Cookie"])["sid"]];
     std::time_t email_time = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
     std::string email_time_string = std::ctime(&email_time);
-    std::string email_str = "DATE: " + email_time_string + "\n";
+    std::string email_str = "DATE: " + email_time_string;
     email_str += "FROM: " + username + "@penncloud\n";
     email_str += "TO: " + recipient + "\n";
     email_str += "SUBJECT: " + subject + "\n";
@@ -1171,25 +1171,36 @@ std::tuple<std::string, std::string, std::string> post_send_message(ReqInitLine 
       std::string backend_address_port = get_backend_address("user_" + username);
       std::string backend_address = backend_address_port.substr(0, backend_address_port.find(":"));
       int backend_port = std::stoi(backend_address_port.substr(backend_address_port.find(":") + 1));
-
       std::string recipient_remove_domain = recipient.substr(0, recipient.find("@"));
-      std::string put_email_response = put_kvs(backend_address, backend_port, "email_" + recipient_remove_domain, uidl + ".txt", email_str, false, "");
-      // std::cerr << "Put email response: " << put_email_response << std::endl;
-      // Run GET and CPUT until successful
-      std::string put_metadata_response;
-      while (put_metadata_response != "+OK Value added")
+      // Check if user exists
+      std::string user_exists = get_kvs(backend_address, backend_port, "email_" + recipient_remove_domain, "metadata.txt");
+      if (user_exists.length()  <= 5 || user_exists.length() > 5 && user_exists.substr(0, 5) != "--ERR")
       {
-        backend_address_port = get_backend_address("user_" + username);
-        backend_address = backend_address_port.substr(0, backend_address_port.find(":"));
-        backend_port = std::stoi(backend_address_port.substr(backend_address_port.find(":") + 1));
-        // std::cerr << "Recipient: " << recipient_remove_domain << std::endl;
-        std::string metadata = get_kvs(backend_address, backend_port, "email_" + recipient_remove_domain, "metadata.txt");
-        // std::cerr << "Get metadata response: " << metadata << std::endl;
-        if (metadata.length()  <= 5 || metadata.length() > 5 && metadata.substr(0, 5) != "--ERR")
+        std::string put_email_response = put_kvs(backend_address, backend_port, "email_" + recipient_remove_domain, uidl + ".txt", email_str, false, "");
+        // std::cerr << "Put email response: " << put_email_response << std::endl;
+        // Run GET and CPUT until successful
+        std::string put_metadata_response;
+        while (put_metadata_response != "+OK Value added")
         {
-          put_metadata_response = put_kvs(backend_address, backend_port, "email_" + recipient_remove_domain, "metadata.txt", metadata + uidl + "\n", true, metadata);
-          // std::cerr << "Put metadata response: " << put_metadata_response << std::endl;
-        }   
+          backend_address_port = get_backend_address("user_" + username);
+          backend_address = backend_address_port.substr(0, backend_address_port.find(":"));
+          backend_port = std::stoi(backend_address_port.substr(backend_address_port.find(":") + 1));
+          // std::cerr << "Recipient: " << recipient_remove_domain << std::endl;
+          std::string metadata = get_kvs(backend_address, backend_port, "email_" + recipient_remove_domain, "metadata.txt");
+          // std::cerr << "Get metadata response: " << metadata << std::endl;
+          if (metadata.length()  <= 5 || metadata.length() > 5 && metadata.substr(0, 5) != "--ERR")
+          {
+            put_metadata_response = put_kvs(backend_address, backend_port, "email_" + recipient_remove_domain, "metadata.txt", metadata + uidl + "\n", true, metadata);
+            // std::cerr << "Put metadata response: " << put_metadata_response << std::endl;
+          }   
+        }
+      }
+      else {
+        std::string init_response = req_init_line->version + " 500 Internal Server Error\r\n";
+        std::string message_body = "The recipent(s) do not have an account in penncloud.";
+        std::string headers = "";
+        headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
+        return std::make_tuple(init_response, headers, message_body);
       }
     }
   }

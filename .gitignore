@@ -1,6 +1,7 @@
 *.o
 frontendserver
 loadbalancer
+smtpserver
 backendserver
 masterbackendserver
 .vscode

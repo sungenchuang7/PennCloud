@@ -12,6 +12,14 @@ struct ReqInitLine
   ReqInitLine(std::string method, std::string uri, std::string version) : method(method), path(path), version(version) {}
 };
 
+void computeDigest(char *data, int dataLengthBytes, unsigned char *digestBuffer);
+
+// BACKEND COMMS FUNCTIONS
+std::string get_backend_address(std::string rowkey);
+std::string get_kvs(std::string ip, int port, std::string row, std::string col);
+std::string put_kvs(std::string ip, int port, std::string row, std::string col, std::string value, bool is_cput, std::string prev_value);
+std::string delete_kvs(std::string ip, int port, std::string row, std::string col);
+
 // GET ROUTES
 std::tuple<std::string, std::string, std::string> get_index(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers);
 std::tuple<std::string, std::string, std::string> get_signup(ReqInitLine *req_init_line);
