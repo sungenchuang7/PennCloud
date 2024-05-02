@@ -71,6 +71,9 @@ void SIGUSR1_handler(int signum);
 std::string config_file_path;
 std::map<std::string, bool> server_status_map;
 std::map<int, std::vector<std::string>> tablet_storage_map;
+std::map<int, std::string> group_primary_map;  // this keeps track of the current primary node of each replication group <group_no, primary_serverID>
+std::map<std::string, int> serverID_group_map; // given a serverID, this map tells you which replication group this server is in
+// std::map<int, std::map<int, std::vector<std::string>>> tablet_storage_map;
 std::vector<std::string> config_serverIDs; // server IDs (address + port) read from config file
 int num_servers;                           // number of storage nodes
 
@@ -86,6 +89,7 @@ bool write_helper(int socket_fd, std::string msg);
 //////////////////////////////// UTILITY HELPERS ////////////////////////////////
 // std::string get_serverID(int server_index);
 void init_tablet_storage_map();
+void init_group_primary_map();
 int redirect(char first_char);
 
 int main(int argc, char *argv[])
@@ -139,6 +143,7 @@ int main(int argc, char *argv[])
     std::cout << "num_servers: " << num_servers << std::endl;
 
     init_tablet_storage_map();
+    init_group_primary_map();
 
     heartbeat_arg_ptrs.resize(num_servers);
     heartbeat_threads.resize(num_servers);
@@ -391,14 +396,19 @@ void *frontend_thread_func(void *arg)
 
                 char first_char = row_key.at(0);
 
-                int tablet_no = redirect(first_char);
+                // int tablet_no = redirect(first_char);
+                int group_no = redirect(first_char);
 
-                if (debug_mode)
-                {
-                    std::cout << "tablet_no: " << tablet_no << std::endl;
-                }
+                // if (debug_mode)
+                // {
+                //     std::cout << "tablet_no: " << tablet_no << std::endl;
+                // }
 
-                if (tablet_no == -1)
+                // if (tablet_no == -1)
+                // {
+                //     response = "-ERR invalid row key\r\n";
+                // }
+                if (group_no == -1)
                 {
                     response = "-ERR invalid row key\r\n";
                 }
@@ -410,19 +420,20 @@ void *frontend_thread_func(void *arg)
                     {
                         std::cout << "count: " << tablet_storage_map.count(2) << std::endl;
                     }
-                    auto &tablet_servers_list = tablet_storage_map.at(tablet_no);
-                    if (debug_mode)
+                    // auto &tablet_servers_list = tablet_storage_map.at(tablet_no);
+                    auto &tablet_servers_list = tablet_storage_map.at(group_no);
+                    // if (debug_mode)
+                    // {
+                    //     std::cout << "broke here?" << std::endl;
+                    // }
+                    std::string server_ID = tablet_servers_list.front();
+                    while (!server_status_map.at(server_ID)) // if this server is dead
                     {
-                        std::cout << "broke here?" << std::endl;
+                        tablet_servers_list.erase(tablet_storage_map.at(group_no).begin());
+                        tablet_servers_list.push_back(server_ID);
+                        server_ID = tablet_servers_list.front();
                     }
-                    std::string primary_server_ID = tablet_servers_list.at(0);
-                    while (!server_status_map.at(primary_server_ID))
-                    {
-                        tablet_servers_list.erase(tablet_storage_map.at(tablet_no).begin());
-                        tablet_servers_list.push_back(primary_server_ID);
-                        primary_server_ID = tablet_servers_list.at(0);
-                    }
-                    response = "RDIR," + primary_server_ID + "\r\n";
+                    response = "RDIR," + server_ID + "\r\n";
                 }
                 write_helper(socket_fd, response);
                 verbose_print_helper_server(socket_fd, response);
@@ -709,7 +720,8 @@ bool read_config(const char *filepath)
     while (std::getline(file, line)) // each iteration reads a line from the file
     {
         line_count++;
-        if (line_count == 1) { // first line is the master's own addr and port, should be ignored
+        if (line_count == 1)
+        { // first line is the master's own addr and port, should be ignored
             continue;
         }
         config_serverIDs.push_back(line);
@@ -864,6 +876,21 @@ void *heartbeat_thread_func(void *arg)
             std::string response = "QUIT\r\n";
             write_helper(sockfd, response);
         }
+        else
+        {
+            int group_no = serverID_group_map.at(server_key);
+            if (group_primary_map.at(group_no) == server_key)
+            { // if the down server is the primary of the group
+                std::string serverID_2 = tablet_storage_map.at(group_no).front();
+                while (!server_status_map.at(serverID_2))
+                {
+                    tablet_storage_map.at(group_no).erase(tablet_storage_map.at(group_no).begin());
+                    tablet_storage_map.at(group_no).push_back(serverID_2);
+                    serverID_2 = tablet_storage_map.at(group_no).front();
+                }
+                group_primary_map.at(group_no) = serverID_2;
+            }
+        }
         // close(sockfd); // storage node shuts itself down if detecting this socket is closed.
     }
 
@@ -872,42 +899,67 @@ void *heartbeat_thread_func(void *arg)
 
 void init_tablet_storage_map()
 {
+    int group = -1;
     for (int i = 1; i <= num_servers; i++)
     {
-        int primary = i;
-        int rep1 = -1;
-        int rep2 = -1;
-
-        if ((i + 1) > num_servers)
+        if (1 <= i && i <= 3)
         {
-            rep1 = (i + 1) % num_servers;
+            group = 1;
+        }
+        else if (4 <= i && i <= 6)
+        {
+            group = 2;
         }
         else
         {
-            rep1 = i + 1;
-        }
-        if ((i + 2) > num_servers)
-        {
-            rep2 = (i + 2) % num_servers;
-        }
-        else
-        {
-            rep2 = i + 2;
-        }
-        if (debug_mode)
-        {
-            std::cout << "primary: " << primary << std::endl;
-            std::cout << "rep1: " << rep1 << std::endl;
-            std::cout << "rep2: " << rep2 << std::endl;
+            group = 3;
         }
 
-        tablet_storage_map[i].push_back(config_serverIDs.at(primary - 1));
-        tablet_storage_map[i].push_back(config_serverIDs.at(rep1 - 1));
-        tablet_storage_map[i].push_back(config_serverIDs.at(rep2 - 1));
+        std::string cur_serverID = config_serverIDs.at(i - 1);
+        // int primary = i;
+        // int rep1 = -1;
+        // int rep2 = -1;
+
+        // if ((i + 1) > num_servers)
+        // {
+        //     rep1 = (i + 1) % num_servers;
+        // }
+        // else
+        // {
+        //     rep1 = i + 1;
+        // }
+        // if ((i + 2) > num_servers)
+        // {
+        //     rep2 = (i + 2) % num_servers;
+        // }
+        // else
+        // {
+        //     rep2 = i + 2;
+        // }
+        // if (debug_mode)
+        // {
+        //     std::cout << "primary: " << primary << std::endl;
+        //     std::cout << "rep1: " << rep1 << std::endl;
+        //     std::cout << "rep2: " << rep2 << std::endl;
+        // }
+        tablet_storage_map[group].push_back(cur_serverID);
+        serverID_group_map[cur_serverID] = group;
+
+        // tablet_storage_map[i].push_back(config_serverIDs.at(rep1 - 1));
+        // tablet_storage_map[i].push_back(config_serverIDs.at(rep2 - 1));
     }
 
     if (debug_mode)
     {
         std::cout << "tablet_storage_map.count(2): " << tablet_storage_map.count(2) << std::endl;
+    }
+}
+
+void init_group_primary_map()
+{
+    for (const auto &kv_pair : tablet_storage_map)
+    {
+        int group_no = kv_pair.first;
+        group_primary_map[group_no] = kv_pair.second.at(0); // pick the first node in a group as primary by default
     }
 }
