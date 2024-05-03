@@ -11,3 +11,7 @@ First, run all the storage node servers on port as per `./backend/config.txt` (s
 Then now start running `masterbackendserver` by typing `./masterbackendserver -d -v -p 20000 config.txt`. `masterbackendserver` will send periodic heart-beat messages to detect if any of the storage nodes is down. The communication between the frontend and backend must be initiated via a "INIT,rowkey" command sent to the backend master. The backend will then send back the address and port information of the storage node storing the data for the specified `rowkey` including the username/password login info.  
 
 To clear the memory on disk for storage node #1, navigate to backend/storage_node_1/activity_logs and remove each "tablet_log_" .txt file. Next, navigate to backend/storage_node_1/tablets and remove each "tablet_" .txt file. This information is also stored in a README file in each directory.
+
+To launch smpt server/client:
+`./smtpserver -v` runs the server to receive emails from outside penn cloud system but still running on same host machine (ie Thunderbird)
+`./smtpclient -v` runs the client to send emails to external domains like (@seas.upenn.edu or @gmail.com)
