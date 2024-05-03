@@ -17,6 +17,7 @@
 #include <iostream>
 #include <map>
 #include <tuple>
+#include <unordered_set>
 
 #define DEFAULT_PORT 20000
 #define MAX_LISTEN_BACKLOG 500
@@ -71,6 +72,10 @@ void SIGUSR1_handler(int signum);
 std::string config_file_path;
 std::map<std::string, bool> server_status_map;
 std::map<int, std::vector<std::string>> tablet_storage_map;
+std::map<int, std::string> group_primary_map;  // this keeps track of the current primary node of each replication group <group_no, primary_serverID>
+std::map<std::string, int> serverID_group_map; // given a serverID, this map tells you which replication group this server is in
+std::unordered_set<std::string> down_servers;
+// std::map<int, std::map<int, std::vector<std::string>>> tablet_storage_map;
 std::vector<std::string> config_serverIDs; // server IDs (address + port) read from config file
 int num_servers;                           // number of storage nodes
 
@@ -82,10 +87,13 @@ int listen_fd;
 void verbose_print_helper_server(const int &socket_fd, const std::string &msg);
 void verbose_print_helper_client(const int &socket_fd, const std::string &msg);
 bool write_helper(int socket_fd, std::string msg);
+ssize_t read_until_crlf(int sockfd, char **out);
 
 //////////////////////////////// UTILITY HELPERS ////////////////////////////////
 // std::string get_serverID(int server_index);
 void init_tablet_storage_map();
+void init_group_primary_map();
+void start_heartbeat_monitoring();
 int redirect(char first_char);
 
 int main(int argc, char *argv[])
@@ -139,28 +147,27 @@ int main(int argc, char *argv[])
     std::cout << "num_servers: " << num_servers << std::endl;
 
     init_tablet_storage_map();
+    init_group_primary_map();
+    start_heartbeat_monitoring();
 
-    heartbeat_arg_ptrs.resize(num_servers);
-    heartbeat_threads.resize(num_servers);
-    for (int i = 0; i < num_servers; i++) // create a thread for each storage node for monitoring
-    {
-        std::vector<std::string> temp = split_string(config_serverIDs.at(i), ":"); // split "127.0.0.1:5000" for example
-        std::string server_address = temp[0];
-        int server_port = std::stoi(temp[1]);
-        heartbeat_arg *arg_ptr = new heartbeat_arg(server_address, server_port);
-        heartbeat_arg_ptrs.push_back(arg_ptr);
-        pthread_create(&heartbeat_threads.at(i), NULL, heartbeat_thread_func, arg_ptr);
-    }
+    // heartbeat_arg_ptrs.resize(num_servers);
+    // heartbeat_threads.resize(num_servers);
+    // for (int i = 0; i < num_servers; i++) // create a thread for each storage node for monitoring
+    // {
+    //     std::vector<std::string> temp = split_string(config_serverIDs.at(i), ":"); // split "127.0.0.1:5000" for example
+    //     std::string server_address = temp[0];
+    //     int server_port = std::stoi(temp[1]);
+    //     heartbeat_arg *arg_ptr = new heartbeat_arg(server_address, server_port);
+    //     heartbeat_arg_ptrs.push_back(arg_ptr);
+    //     pthread_create(&heartbeat_threads.at(i), NULL, heartbeat_thread_func, arg_ptr);
+    // }
 
     // Initialize socket for listening for connections with from frontend
     listen_fd = socket(AF_INET, SOCK_STREAM, 0);
 
     if (listen_fd < 0)
     {
-        if (debug_mode)
-        {
-            perror("ERROR opening socket");
-        }
+        perror("ERROR opening socket");
         exit(EXIT_FAILURE);
     }
     // Create server address structure
@@ -176,20 +183,14 @@ int main(int argc, char *argv[])
     // Bind socket to the server address
     if (bind(listen_fd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0)
     {
-        if (debug_mode)
-        {
-            perror("ERROR on binding");
-        }
+        perror("ERROR on binding");
         exit(EXIT_FAILURE);
     }
 
     // Listen for incoming connections
     if (listen(listen_fd, MAX_LISTEN_BACKLOG) < 0) // does it matter what we put in the 2nd arg?
     {
-        if (debug_mode)
-        {
-            perror("ERROR on listen");
-        }
+        perror("ERROR on listen");
         exit(EXIT_FAILURE);
     }
 
@@ -278,7 +279,6 @@ void *frontend_thread_func(void *arg)
     //     return NULL;
     // }
     write_helper(socket_fd, welcome_message);
-
     verbose_print_helper_server(socket_fd, welcome_message);
 
     //////// Start reading from the client
@@ -369,7 +369,6 @@ void *frontend_thread_func(void *arg)
                 }
 
                 std::vector<std::string> command_tokens = split_string(command, ","); // INIT,linhphan -> {INIT, linhphan}
-
                 if (command_tokens.size() != 2)
                 {
                     response = "-ERR Incorrect command syntax\r\n";
@@ -391,14 +390,19 @@ void *frontend_thread_func(void *arg)
 
                 char first_char = row_key.at(0);
 
-                int tablet_no = redirect(first_char);
+                // int tablet_no = redirect(first_char);
+                int group_no = redirect(first_char);
 
-                if (debug_mode)
-                {
-                    std::cout << "tablet_no: " << tablet_no << std::endl;
-                }
+                // if (debug_mode)
+                // {
+                //     std::cout << "tablet_no: " << tablet_no << std::endl;
+                // }
 
-                if (tablet_no == -1)
+                // if (tablet_no == -1)
+                // {
+                //     response = "-ERR invalid row key\r\n";
+                // }
+                if (group_no == -1)
                 {
                     response = "-ERR invalid row key\r\n";
                 }
@@ -410,19 +414,29 @@ void *frontend_thread_func(void *arg)
                     {
                         std::cout << "count: " << tablet_storage_map.count(2) << std::endl;
                     }
-                    auto &tablet_servers_list = tablet_storage_map.at(tablet_no);
-                    if (debug_mode)
+                    // auto &tablet_servers_list = tablet_storage_map.at(tablet_no);
+                    auto &tablet_servers_list = tablet_storage_map.at(group_no);
+                    // if (debug_mode)
+                    // {
+                    //     std::cout << "broke here?" << std::endl;
+                    // }
+                    std::string server_ID = tablet_servers_list.front();
+                    while (down_servers.count(server_ID) > 0) // if this server is dead
                     {
-                        std::cout << "broke here?" << std::endl;
+                        tablet_servers_list.erase(tablet_storage_map.at(group_no).begin());
+                        tablet_servers_list.push_back(server_ID);
+                        server_ID = tablet_servers_list.front();
                     }
-                    std::string primary_server_ID = tablet_servers_list.at(0);
-                    while (!server_status_map.at(primary_server_ID))
-                    {
-                        tablet_servers_list.erase(tablet_storage_map.at(tablet_no).begin());
-                        tablet_servers_list.push_back(primary_server_ID);
-                        primary_server_ID = tablet_servers_list.at(0);
-                    }
-                    response = "RDIR," + primary_server_ID + "\r\n";
+                    // while (!server_status_map.at(server_ID)) // if this server is dead
+                    // {
+                    //     tablet_servers_list.erase(tablet_storage_map.at(group_no).begin());
+                    //     tablet_servers_list.push_back(server_ID);
+                    //     server_ID = tablet_servers_list.front();
+                    // }
+                    response = "RDIR," + server_ID + "\r\n";
+                    // update front of vector
+                    tablet_servers_list.erase(tablet_storage_map.at(group_no).begin());
+                    tablet_servers_list.push_back(server_ID);
                 }
                 write_helper(socket_fd, response);
                 verbose_print_helper_server(socket_fd, response);
@@ -444,6 +458,93 @@ void *frontend_thread_func(void *arg)
                 verbose_print_helper_server(socket_fd, response);
                 pthread_mutex_unlock(&server_status_map_mutex);
             }
+            else if (command == "GTPM")
+            {
+                std::vector<std::string> command_tokens = split_string(command, ","); // INIT,linhphan -> {INIT, linhphan}
+                if (command_tokens.size() != 2)
+                {
+                    response = "-ERR Incorrect command syntax\r\n";
+                    write_helper(socket_fd, response);
+                    verbose_print_helper_server(socket_fd, response);
+                    continue;
+                }
+                std::string serverID_to_lookup = command_tokens.at(1);
+                if (serverID_group_map.count(serverID_to_lookup) == 0)
+                {
+                    response = "-ERR Invalid server address\r\n";
+                    write_helper(socket_fd, response);
+                    verbose_print_helper_server(socket_fd, response);
+                    continue;
+                }
+                int server_group_no = serverID_group_map.at(serverID_to_lookup);
+                std::string primaryID = group_primary_map.at(server_group_no);
+                response += "+OK " + primaryID;
+                write_helper(socket_fd, response);
+                verbose_print_helper_server(socket_fd, response);
+            }
+            else if (command == "GTGP")
+            {
+                std::vector<std::string> command_tokens = split_string(command, ","); // INIT,linhphan -> {INIT, linhphan}
+                if (command_tokens.size() != 2)
+                {
+                    response = "-ERR Incorrect command syntax\r\n";
+                    write_helper(socket_fd, response);
+                    verbose_print_helper_server(socket_fd, response);
+                    continue;
+                }
+                std::string serverID_to_lookup = command_tokens.at(1);
+                if (serverID_group_map.count(serverID_to_lookup) == 0)
+                {
+                    response = "-ERR Invalid server address\r\n";
+                    write_helper(socket_fd, response);
+                    verbose_print_helper_server(socket_fd, response);
+                    continue;
+                }
+
+                response += "+OK ";
+                int server_group_no = serverID_group_map.at(serverID_to_lookup);
+                std::vector<std::string> server_list = tablet_storage_map.at(server_group_no);
+                for (const std::string &serverID : server_list)
+                {
+                    if (server_status_map.at(serverID))
+                    { // if it's alive
+                        response += serverID + ",";
+                    }
+                }
+                response = response.substr(0, response.size() - 1); // remove last char (extra ,)
+                write_helper(socket_fd, response);
+                verbose_print_helper_server(socket_fd, response);
+            }
+            else if (command == "RCVY")
+            {
+                std::vector<std::string> command_tokens = split_string(command, ","); // INIT,linhphan -> {INIT, linhphan}
+                if (command_tokens.size() != 2)
+                {
+                    response = "-ERR Incorrect command syntax\r\n";
+                    write_helper(socket_fd, response);
+                    verbose_print_helper_server(socket_fd, response);
+                    continue;
+                }
+                std::string serverID_to_lookup = command_tokens.at(1);
+                if (serverID_group_map.count(serverID_to_lookup) == 0)
+                {
+                    response = "-ERR Invalid server address\r\n";
+                    write_helper(socket_fd, response);
+                    verbose_print_helper_server(socket_fd, response);
+                    continue;
+                }
+                down_servers.erase(command_tokens.at(1));
+                response = "+OK\r\n";
+                write_helper(socket_fd, response);
+                verbose_print_helper_server(socket_fd, response);
+            }
+            else if (command == "QUIT")
+            {
+                response = "+OK Goodbye!\r\n";
+                write_helper(socket_fd, response);
+                verbose_print_helper_server(socket_fd, response);
+                break;
+            }
             else
             {
                 response = "-ERR unrecognizable command\r\n";
@@ -454,7 +555,6 @@ void *frontend_thread_func(void *arg)
     }
 
     close(socket_fd);
-    // remove_connection(socket_fd);
     remove_connection(socket_fd);
     // std::cout << "Thread dying detached!" << std::endl;
     return NULL;
@@ -709,7 +809,8 @@ bool read_config(const char *filepath)
     while (std::getline(file, line)) // each iteration reads a line from the file
     {
         line_count++;
-        if (line_count == 1) { // first line is the master's own addr and port, should be ignored
+        if (line_count == 1)
+        { // first line is the master's own addr and port, should be ignored
             continue;
         }
         config_serverIDs.push_back(line);
@@ -793,10 +894,7 @@ void *heartbeat_thread_func(void *arg)
     while (!shut_down_flag)
     {
         sleep(heartbeat_interval);
-        // if (shut_down_flag)
-        // {
-        //     return nullptr;
-        // }
+
         int sockfd = -1;
         struct sockaddr_in serv_addr;
         serv_addr.sin_family = AF_INET;
@@ -844,6 +942,11 @@ void *heartbeat_thread_func(void *arg)
 
         bool is_alive = (valread > 0);
 
+        if (down_servers.count(server_key) > 0)
+        {
+            continue;
+        }
+
         pthread_mutex_lock(&server_status_map_mutex);
         server_status_map[server_key] = is_alive;
         if (debug_mode)
@@ -863,8 +966,51 @@ void *heartbeat_thread_func(void *arg)
         {
             std::string response = "QUIT\r\n";
             write_helper(sockfd, response);
+
+            char *data;
+            ssize_t result = read_until_crlf(sockfd, &data);
+            if (result > 0)
+            {
+                printf("Received: %s", data);
+            }
+            else if (result == 0)
+            {
+                printf("Connection closed by peer\n");
+            }
+            else
+            {
+                printf("Error reading from socket\n");
+            }
+            std::string data_string{data};
+            if (data_string == "+OK Goodbye!\r\n") {
+                std::cout << "Good" << std::endl;
+            } else {
+                std::cout << "Bad" << std::endl;
+            }
+            free(data);
+            // check if storage server sends something back (14 chars)
+            // char buffer[DEFAULT_READ_BUFFER_SIZE] = {0};
+            // int valread = recv(sockfd, buffer, DEFAULT_READ_BUFFER_SIZE, 0);
         }
-        // close(sockfd); // storage node shuts itself down if detecting this socket is closed.
+        else
+        {
+            down_servers.insert(server_key);
+            int group_no = serverID_group_map.at(server_key);
+            if (group_primary_map.at(group_no) == server_key)
+            { // if the down server is the primary of the group
+                std::string serverID_2 = tablet_storage_map.at(group_no).front();
+                while (!server_status_map.at(serverID_2))
+                {
+                    tablet_storage_map.at(group_no).erase(tablet_storage_map.at(group_no).begin());
+                    tablet_storage_map.at(group_no).push_back(serverID_2);
+                    serverID_2 = tablet_storage_map.at(group_no).front();
+                }
+                group_primary_map.at(group_no) = serverID_2;
+            }
+        }
+
+        // sleep(1);
+        close(sockfd); // storage node shuts itself down if detecting this socket is closed.
     }
 
     return NULL;
@@ -872,38 +1018,54 @@ void *heartbeat_thread_func(void *arg)
 
 void init_tablet_storage_map()
 {
+    int group = -1;
     for (int i = 1; i <= num_servers; i++)
     {
-        int primary = i;
-        int rep1 = -1;
-        int rep2 = -1;
-
-        if ((i + 1) > num_servers)
+        if (1 <= i && i <= 3)
         {
-            rep1 = (i + 1) % num_servers;
+            group = 1;
+        }
+        else if (4 <= i && i <= 6)
+        {
+            group = 2;
         }
         else
         {
-            rep1 = i + 1;
-        }
-        if ((i + 2) > num_servers)
-        {
-            rep2 = (i + 2) % num_servers;
-        }
-        else
-        {
-            rep2 = i + 2;
-        }
-        if (debug_mode)
-        {
-            std::cout << "primary: " << primary << std::endl;
-            std::cout << "rep1: " << rep1 << std::endl;
-            std::cout << "rep2: " << rep2 << std::endl;
+            group = 3;
         }
 
-        tablet_storage_map[i].push_back(config_serverIDs.at(primary - 1));
-        tablet_storage_map[i].push_back(config_serverIDs.at(rep1 - 1));
-        tablet_storage_map[i].push_back(config_serverIDs.at(rep2 - 1));
+        std::string cur_serverID = config_serverIDs.at(i - 1);
+        // int primary = i;
+        // int rep1 = -1;
+        // int rep2 = -1;
+
+        // if ((i + 1) > num_servers)
+        // {
+        //     rep1 = (i + 1) % num_servers;
+        // }
+        // else
+        // {
+        //     rep1 = i + 1;
+        // }
+        // if ((i + 2) > num_servers)
+        // {
+        //     rep2 = (i + 2) % num_servers;
+        // }
+        // else
+        // {
+        //     rep2 = i + 2;
+        // }
+        // if (debug_mode)
+        // {
+        //     std::cout << "primary: " << primary << std::endl;
+        //     std::cout << "rep1: " << rep1 << std::endl;
+        //     std::cout << "rep2: " << rep2 << std::endl;
+        // }
+        tablet_storage_map[group].push_back(cur_serverID);
+        serverID_group_map[cur_serverID] = group;
+
+        // tablet_storage_map[i].push_back(config_serverIDs.at(rep1 - 1));
+        // tablet_storage_map[i].push_back(config_serverIDs.at(rep2 - 1));
     }
 
     if (debug_mode)
@@ -911,3 +1073,97 @@ void init_tablet_storage_map()
         std::cout << "tablet_storage_map.count(2): " << tablet_storage_map.count(2) << std::endl;
     }
 }
+
+void init_group_primary_map()
+{
+    for (const auto &kv_pair : tablet_storage_map)
+    {
+        int group_no = kv_pair.first;
+        group_primary_map[group_no] = kv_pair.second.at(0); // pick the first node in a group as primary by default
+    }
+}
+
+void start_heartbeat_monitoring()
+{
+    heartbeat_arg_ptrs.resize(num_servers);
+    heartbeat_threads.resize(num_servers);
+    for (int i = 0; i < num_servers; i++) // create a thread for each storage node for monitoring
+    {
+        std::vector<std::string> temp = split_string(config_serverIDs.at(i), ":"); // split "127.0.0.1:5000" for example
+        std::string server_address = temp[0];
+        int server_port = std::stoi(temp[1]);
+        heartbeat_arg *arg_ptr = new heartbeat_arg(server_address, server_port);
+        heartbeat_arg_ptrs.push_back(arg_ptr);
+        pthread_create(&heartbeat_threads.at(i), NULL, heartbeat_thread_func, arg_ptr);
+    }
+}
+
+// Helper function to read data from socket until "\r\n" is found
+ssize_t read_until_crlf(int sockfd, char **out)
+{
+    char *buffer = (char *)malloc(DEFAULT_READ_BUFFER_SIZE);
+    if (!buffer)
+    {
+        perror("Failed to allocate buffer");
+        return -1;
+    }
+
+    char *ptr = buffer;
+    ssize_t total_read = 0;
+    ssize_t n_read;
+
+    while (1)
+    {
+        char c;
+        n_read = recv(sockfd, &c, 1, 0);
+        if (n_read < 0)
+        {
+            perror("Failed to read from socket");
+            free(buffer);
+            return -1;
+        }
+        else if (n_read == 0)
+        {
+            // Socket closed
+            if (total_read == 0)
+            {
+                free(buffer);
+                return 0;
+            }
+            break;
+        }
+
+        *ptr++ = c;
+        total_read += n_read;
+
+        // Check if the last two characters are "\r\n"
+        if (total_read > 1 && *(ptr - 2) == '\r' && *(ptr - 1) == '\n')
+        {
+            break;
+        }
+
+        // Reallocate buffer if needed
+        if (total_read >= DEFAULT_READ_BUFFER_SIZE - 1)
+        {
+            ssize_t current_size = ptr - buffer;
+            char *new_buffer = (char *)realloc(buffer, current_size + DEFAULT_READ_BUFFER_SIZE);
+            if (!new_buffer)
+            {
+                perror("Failed to reallocate buffer");
+                free(buffer);
+                return -1;
+            }
+            buffer = new_buffer;
+            ptr = buffer + current_size;
+        }
+    }
+
+    // Null-terminate the string
+    *ptr = '\0';
+    *out = buffer;
+    return total_read;
+}
+
+// bool handle_INIT(int socket_fd, std::string command) {
+
+// }
