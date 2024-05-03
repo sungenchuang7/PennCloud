@@ -22,6 +22,11 @@
 #include <uuid/uuid.h>
 #include <openssl/md5.h>
 #include <algorithm>
+#include <resolv.h>
+#include <sys/types.h>
+#include <netinet/in.h>
+#include <arpa/nameser.h>
+#include <netdb.h>
 
 std::string STATICS_LOC = "./statics/";
 int MAX_BUFF_SIZE = 1000;
@@ -1136,7 +1141,6 @@ std::tuple<std::string, std::string, std::string> post_send_message(ReqInitLine 
   {
     recipients.push_back(element);
   }
-  // TODO: update sending to users outside @penncloud
   for (std::string recipient : recipients)
   {
     // Convert message to email format
@@ -1198,6 +1202,97 @@ std::tuple<std::string, std::string, std::string> post_send_message(ReqInitLine 
       else {
         std::string init_response = req_init_line->version + " 500 Internal Server Error\r\n";
         std::string message_body = "The recipent(s) do not have an account in penncloud.";
+        std::string headers = "";
+        headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
+        return std::make_tuple(init_response, headers, message_body);
+      }
+    } else
+    {
+      // User is outside of @penncloud
+
+      // Get ip address of external email server
+      std::string domain = recipient.substr(recipient.find("@") + 1);
+      unsigned char nsbuf[4096];
+      int l = res_query(domain.c_str(), C_IN, T_MX, (u_char *)&nsbuf, sizeof(nsbuf));
+      if (l < 0)
+      {
+        std::string init_response = req_init_line->version + " 500 Internal Server Error\r\n";
+        std::string message_body = "Error: Could not find MX record for domain " + domain;
+        std::string headers = "";
+        headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
+        return std::make_tuple(init_response, headers, message_body);
+      }
+
+      ns_msg handle;
+      ns_rr rr;
+      if (ns_initparse(nsbuf, l, &handle) < 0)
+      {
+        std::string init_response = req_init_line->version + " 500 Internal Server Error\r\n";
+        std::string message_body = "Error: Could not parse DNS response";
+        std::string headers = "";
+        headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
+        return std::make_tuple(init_response, headers, message_body);
+      }
+      std::string ip_addr;
+      for (int i = 0; i < l; i++)
+      {
+        if (ip_addr != "")
+        {
+          break;
+        }
+        ns_parserr(&handle, ns_s_an, 1, &rr);
+        char dispbuf[4096];
+        ns_sprintrr(&handle, &rr, NULL, NULL, dispbuf, sizeof(dispbuf));
+        // std::cerr << "DNS Response: " << dispbuf << std::endl;
+        const unsigned char *mx_data = ns_rr_rdata(rr);
+        mx_data += 2;
+        unsigned char mx_domain[NS_MAXDNAME];
+        ns_name_unpack(ns_msg_base(handle), ns_msg_end(handle), mx_data, mx_domain, NS_MAXDNAME);
+        // std::cerr << "mx_domain: " << mx_domain << std::endl;
+        char mx_domain_ascii[NS_MAXDNAME];
+        ns_name_ntop(mx_domain, mx_domain_ascii, NS_MAXDNAME);
+        struct hostent *mx_host = gethostbyname(mx_domain_ascii);
+        ip_addr = inet_ntoa(*(struct in_addr *)mx_host->h_addr_list[0]);
+      }
+      
+      std::cerr << "ip_addr: " << ip_addr << std::endl;
+      
+      // Send info to smtp client
+      std::string smtp_client_msg = ip_addr + ":25\n"; // Remote server address
+      smtp_client_msg += username + "@seas.upenn.edu\n"; // From (change to seas.upenn.edu to avoid spam filter)
+      smtp_client_msg += recipient + "\n"; // To
+
+      smtp_client_msg += "From: <" + username + "@seas.upenn.edu>\n";
+      smtp_client_msg += "To: <" + recipient + ">\n";
+      smtp_client_msg += "Date: " + email_time_string;
+      smtp_client_msg += "Subject: " + subject + "\n";
+      smtp_client_msg += "Message-ID: <" + uidl + "@seas.upenn.edu>\n";
+      smtp_client_msg += message + "\r\n"; // Data
+
+      // Send message to smtp client
+      int smtp_client_socket = socket(AF_INET, SOCK_STREAM, 0);
+      struct sockaddr_in servaddr;
+      bzero(&servaddr, sizeof(servaddr));
+      servaddr.sin_family = AF_INET;
+      std::string localhost_addr = "127.0.0.1";
+      inet_pton(AF_INET, localhost_addr.c_str(), &servaddr.sin_addr);
+      servaddr.sin_port = htons(2501);
+
+      connect(smtp_client_socket, (struct sockaddr *)&servaddr, sizeof(servaddr));
+      send(smtp_client_socket, smtp_client_msg.c_str(), smtp_client_msg.length(), 0);
+
+      // Receive response from smtp client
+      char smtp_client_response[1024];
+      bzero(smtp_client_response, 1024);
+      int bytes_read = read(smtp_client_socket, smtp_client_response, 1024);
+      smtp_client_response[bytes_read] = '\0';
+      close(smtp_client_socket);
+      std::string smtp_client_response_str = smtp_client_response;
+      std::cerr << "SMTP Client Response: " << smtp_client_response_str << std::endl;
+      if (smtp_client_response_str.find("+OK") == std::string::npos)
+      {
+        std::string init_response = req_init_line->version + " 500 Internal Server Error\r\n";
+        std::string message_body = "Error: Could not send email to external server";
         std::string headers = "";
         headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
         return std::make_tuple(init_response, headers, message_body);
