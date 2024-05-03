@@ -17,6 +17,7 @@
 #include <iostream>
 #include <map>
 #include <tuple>
+#include <unordered_set>
 
 #define DEFAULT_PORT 20000
 #define MAX_LISTEN_BACKLOG 500
@@ -73,6 +74,7 @@ std::map<std::string, bool> server_status_map;
 std::map<int, std::vector<std::string>> tablet_storage_map;
 std::map<int, std::string> group_primary_map;  // this keeps track of the current primary node of each replication group <group_no, primary_serverID>
 std::map<std::string, int> serverID_group_map; // given a serverID, this map tells you which replication group this server is in
+std::unordered_set<std::string> down_servers;
 // std::map<int, std::map<int, std::vector<std::string>>> tablet_storage_map;
 std::vector<std::string> config_serverIDs; // server IDs (address + port) read from config file
 int num_servers;                           // number of storage nodes
@@ -90,6 +92,7 @@ bool write_helper(int socket_fd, std::string msg);
 // std::string get_serverID(int server_index);
 void init_tablet_storage_map();
 void init_group_primary_map();
+void start_heartbeat_monitoring();
 int redirect(char first_char);
 
 int main(int argc, char *argv[])
@@ -144,28 +147,26 @@ int main(int argc, char *argv[])
 
     init_tablet_storage_map();
     init_group_primary_map();
+    start_heartbeat_monitoring();
 
-    heartbeat_arg_ptrs.resize(num_servers);
-    heartbeat_threads.resize(num_servers);
-    for (int i = 0; i < num_servers; i++) // create a thread for each storage node for monitoring
-    {
-        std::vector<std::string> temp = split_string(config_serverIDs.at(i), ":"); // split "127.0.0.1:5000" for example
-        std::string server_address = temp[0];
-        int server_port = std::stoi(temp[1]);
-        heartbeat_arg *arg_ptr = new heartbeat_arg(server_address, server_port);
-        heartbeat_arg_ptrs.push_back(arg_ptr);
-        pthread_create(&heartbeat_threads.at(i), NULL, heartbeat_thread_func, arg_ptr);
-    }
+    // heartbeat_arg_ptrs.resize(num_servers);
+    // heartbeat_threads.resize(num_servers);
+    // for (int i = 0; i < num_servers; i++) // create a thread for each storage node for monitoring
+    // {
+    //     std::vector<std::string> temp = split_string(config_serverIDs.at(i), ":"); // split "127.0.0.1:5000" for example
+    //     std::string server_address = temp[0];
+    //     int server_port = std::stoi(temp[1]);
+    //     heartbeat_arg *arg_ptr = new heartbeat_arg(server_address, server_port);
+    //     heartbeat_arg_ptrs.push_back(arg_ptr);
+    //     pthread_create(&heartbeat_threads.at(i), NULL, heartbeat_thread_func, arg_ptr);
+    // }
 
     // Initialize socket for listening for connections with from frontend
     listen_fd = socket(AF_INET, SOCK_STREAM, 0);
 
     if (listen_fd < 0)
     {
-        if (debug_mode)
-        {
-            perror("ERROR opening socket");
-        }
+        perror("ERROR opening socket");
         exit(EXIT_FAILURE);
     }
     // Create server address structure
@@ -181,20 +182,14 @@ int main(int argc, char *argv[])
     // Bind socket to the server address
     if (bind(listen_fd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0)
     {
-        if (debug_mode)
-        {
-            perror("ERROR on binding");
-        }
+        perror("ERROR on binding");
         exit(EXIT_FAILURE);
     }
 
     // Listen for incoming connections
     if (listen(listen_fd, MAX_LISTEN_BACKLOG) < 0) // does it matter what we put in the 2nd arg?
     {
-        if (debug_mode)
-        {
-            perror("ERROR on listen");
-        }
+        perror("ERROR on listen");
         exit(EXIT_FAILURE);
     }
 
@@ -283,7 +278,6 @@ void *frontend_thread_func(void *arg)
     //     return NULL;
     // }
     write_helper(socket_fd, welcome_message);
-
     verbose_print_helper_server(socket_fd, welcome_message);
 
     //////// Start reading from the client
@@ -374,7 +368,6 @@ void *frontend_thread_func(void *arg)
                 }
 
                 std::vector<std::string> command_tokens = split_string(command, ","); // INIT,linhphan -> {INIT, linhphan}
-
                 if (command_tokens.size() != 2)
                 {
                     response = "-ERR Incorrect command syntax\r\n";
@@ -434,6 +427,9 @@ void *frontend_thread_func(void *arg)
                         server_ID = tablet_servers_list.front();
                     }
                     response = "RDIR," + server_ID + "\r\n";
+                    // update front of vector
+                    tablet_servers_list.erase(tablet_storage_map.at(group_no).begin());
+                    tablet_servers_list.push_back(server_ID);
                 }
                 write_helper(socket_fd, response);
                 verbose_print_helper_server(socket_fd, response);
@@ -455,6 +451,93 @@ void *frontend_thread_func(void *arg)
                 verbose_print_helper_server(socket_fd, response);
                 pthread_mutex_unlock(&server_status_map_mutex);
             }
+            else if (command == "GTPM")
+            {
+                std::vector<std::string> command_tokens = split_string(command, ","); // INIT,linhphan -> {INIT, linhphan}
+                if (command_tokens.size() != 2)
+                {
+                    response = "-ERR Incorrect command syntax\r\n";
+                    write_helper(socket_fd, response);
+                    verbose_print_helper_server(socket_fd, response);
+                    continue;
+                }
+                std::string serverID_to_lookup = command_tokens.at(1);
+                if (serverID_group_map.count(serverID_to_lookup) == 0)
+                {
+                    response = "-ERR Invalid server address\r\n";
+                    write_helper(socket_fd, response);
+                    verbose_print_helper_server(socket_fd, response);
+                    continue;
+                }
+                int server_group_no = serverID_group_map.at(serverID_to_lookup);
+                std::string primaryID = group_primary_map.at(server_group_no);
+                response += "+OK " + primaryID;
+                write_helper(socket_fd, response);
+                verbose_print_helper_server(socket_fd, response);
+            }
+            else if (command == "GTGP")
+            {
+                std::vector<std::string> command_tokens = split_string(command, ","); // INIT,linhphan -> {INIT, linhphan}
+                if (command_tokens.size() != 2)
+                {
+                    response = "-ERR Incorrect command syntax\r\n";
+                    write_helper(socket_fd, response);
+                    verbose_print_helper_server(socket_fd, response);
+                    continue;
+                }
+                std::string serverID_to_lookup = command_tokens.at(1);
+                if (serverID_group_map.count(serverID_to_lookup) == 0)
+                {
+                    response = "-ERR Invalid server address\r\n";
+                    write_helper(socket_fd, response);
+                    verbose_print_helper_server(socket_fd, response);
+                    continue;
+                }
+
+                response += "+OK ";
+                int server_group_no = serverID_group_map.at(serverID_to_lookup);
+                std::vector<std::string> server_list = tablet_storage_map.at(server_group_no);
+                for (const std::string &serverID : server_list)
+                {
+                    if (server_status_map.at(serverID))
+                    { // if it's alive
+                        response += serverID + ",";
+                    }
+                }
+                response = response.substr(0, response.size() - 1); // remove last char (extra ,)
+                write_helper(socket_fd, response);
+                verbose_print_helper_server(socket_fd, response);
+            }
+            else if (command == "RCVY")
+            {
+                std::vector<std::string> command_tokens = split_string(command, ","); // INIT,linhphan -> {INIT, linhphan}
+                if (command_tokens.size() != 2)
+                {
+                    response = "-ERR Incorrect command syntax\r\n";
+                    write_helper(socket_fd, response);
+                    verbose_print_helper_server(socket_fd, response);
+                    continue;
+                }
+                std::string serverID_to_lookup = command_tokens.at(1);
+                if (serverID_group_map.count(serverID_to_lookup) == 0)
+                {
+                    response = "-ERR Invalid server address\r\n";
+                    write_helper(socket_fd, response);
+                    verbose_print_helper_server(socket_fd, response);
+                    continue;
+                }
+                down_servers.erase(command_tokens.at(1));
+                response = "+OK\r\n";
+                write_helper(socket_fd, response);
+                verbose_print_helper_server(socket_fd, response);
+            }
+            else if (command == "QUIT")
+            {
+                response = "+OK Goodbye!\r\n";
+                write_helper(socket_fd, response);
+                verbose_print_helper_server(socket_fd, response);
+                break;
+            }
             else
             {
                 response = "-ERR unrecognizable command\r\n";
@@ -465,7 +548,6 @@ void *frontend_thread_func(void *arg)
     }
 
     close(socket_fd);
-    // remove_connection(socket_fd);
     remove_connection(socket_fd);
     // std::cout << "Thread dying detached!" << std::endl;
     return NULL;
@@ -856,6 +938,11 @@ void *heartbeat_thread_func(void *arg)
 
         bool is_alive = (valread > 0);
 
+        if (down_servers.count(server_key) > 0)
+        {
+            continue;
+        }
+
         pthread_mutex_lock(&server_status_map_mutex);
         server_status_map[server_key] = is_alive;
         if (debug_mode)
@@ -878,6 +965,7 @@ void *heartbeat_thread_func(void *arg)
         }
         else
         {
+            down_servers.insert(server_key);
             int group_no = serverID_group_map.at(server_key);
             if (group_primary_map.at(group_no) == server_key)
             { // if the down server is the primary of the group
@@ -963,3 +1051,22 @@ void init_group_primary_map()
         group_primary_map[group_no] = kv_pair.second.at(0); // pick the first node in a group as primary by default
     }
 }
+
+void start_heartbeat_monitoring()
+{
+    heartbeat_arg_ptrs.resize(num_servers);
+    heartbeat_threads.resize(num_servers);
+    for (int i = 0; i < num_servers; i++) // create a thread for each storage node for monitoring
+    {
+        std::vector<std::string> temp = split_string(config_serverIDs.at(i), ":"); // split "127.0.0.1:5000" for example
+        std::string server_address = temp[0];
+        int server_port = std::stoi(temp[1]);
+        heartbeat_arg *arg_ptr = new heartbeat_arg(server_address, server_port);
+        heartbeat_arg_ptrs.push_back(arg_ptr);
+        pthread_create(&heartbeat_threads.at(i), NULL, heartbeat_thread_func, arg_ptr);
+    }
+}
+
+// bool handle_INIT(int socket_fd, std::string command) {
+
+// }
