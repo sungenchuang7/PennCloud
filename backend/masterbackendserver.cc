@@ -87,6 +87,7 @@ int listen_fd;
 void verbose_print_helper_server(const int &socket_fd, const std::string &msg);
 void verbose_print_helper_client(const int &socket_fd, const std::string &msg);
 bool write_helper(int socket_fd, std::string msg);
+ssize_t read_until_crlf(int sockfd, char **out);
 
 //////////////////////////////// UTILITY HELPERS ////////////////////////////////
 // std::string get_serverID(int server_index);
@@ -420,12 +421,18 @@ void *frontend_thread_func(void *arg)
                     //     std::cout << "broke here?" << std::endl;
                     // }
                     std::string server_ID = tablet_servers_list.front();
-                    while (!server_status_map.at(server_ID)) // if this server is dead
+                    while (down_servers.count(server_ID) > 0) // if this server is dead
                     {
                         tablet_servers_list.erase(tablet_storage_map.at(group_no).begin());
                         tablet_servers_list.push_back(server_ID);
                         server_ID = tablet_servers_list.front();
                     }
+                    // while (!server_status_map.at(server_ID)) // if this server is dead
+                    // {
+                    //     tablet_servers_list.erase(tablet_storage_map.at(group_no).begin());
+                    //     tablet_servers_list.push_back(server_ID);
+                    //     server_ID = tablet_servers_list.front();
+                    // }
                     response = "RDIR," + server_ID + "\r\n";
                     // update front of vector
                     tablet_servers_list.erase(tablet_storage_map.at(group_no).begin());
@@ -887,10 +894,7 @@ void *heartbeat_thread_func(void *arg)
     while (!shut_down_flag)
     {
         sleep(heartbeat_interval);
-        // if (shut_down_flag)
-        // {
-        //     return nullptr;
-        // }
+
         int sockfd = -1;
         struct sockaddr_in serv_addr;
         serv_addr.sin_family = AF_INET;
@@ -962,6 +966,31 @@ void *heartbeat_thread_func(void *arg)
         {
             std::string response = "QUIT\r\n";
             write_helper(sockfd, response);
+
+            char *data;
+            ssize_t result = read_until_crlf(sockfd, &data);
+            if (result > 0)
+            {
+                printf("Received: %s", data);
+            }
+            else if (result == 0)
+            {
+                printf("Connection closed by peer\n");
+            }
+            else
+            {
+                printf("Error reading from socket\n");
+            }
+            std::string data_string{data};
+            if (data_string == "+OK Goodbye!\r\n") {
+                std::cout << "Good" << std::endl;
+            } else {
+                std::cout << "Bad" << std::endl;
+            }
+            free(data);
+            // check if storage server sends something back (14 chars)
+            // char buffer[DEFAULT_READ_BUFFER_SIZE] = {0};
+            // int valread = recv(sockfd, buffer, DEFAULT_READ_BUFFER_SIZE, 0);
         }
         else
         {
@@ -979,7 +1008,9 @@ void *heartbeat_thread_func(void *arg)
                 group_primary_map.at(group_no) = serverID_2;
             }
         }
-        // close(sockfd); // storage node shuts itself down if detecting this socket is closed.
+
+        // sleep(1);
+        close(sockfd); // storage node shuts itself down if detecting this socket is closed.
     }
 
     return NULL;
@@ -1065,6 +1096,72 @@ void start_heartbeat_monitoring()
         heartbeat_arg_ptrs.push_back(arg_ptr);
         pthread_create(&heartbeat_threads.at(i), NULL, heartbeat_thread_func, arg_ptr);
     }
+}
+
+// Helper function to read data from socket until "\r\n" is found
+ssize_t read_until_crlf(int sockfd, char **out)
+{
+    char *buffer = (char *)malloc(DEFAULT_READ_BUFFER_SIZE);
+    if (!buffer)
+    {
+        perror("Failed to allocate buffer");
+        return -1;
+    }
+
+    char *ptr = buffer;
+    ssize_t total_read = 0;
+    ssize_t n_read;
+
+    while (1)
+    {
+        char c;
+        n_read = recv(sockfd, &c, 1, 0);
+        if (n_read < 0)
+        {
+            perror("Failed to read from socket");
+            free(buffer);
+            return -1;
+        }
+        else if (n_read == 0)
+        {
+            // Socket closed
+            if (total_read == 0)
+            {
+                free(buffer);
+                return 0;
+            }
+            break;
+        }
+
+        *ptr++ = c;
+        total_read += n_read;
+
+        // Check if the last two characters are "\r\n"
+        if (total_read > 1 && *(ptr - 2) == '\r' && *(ptr - 1) == '\n')
+        {
+            break;
+        }
+
+        // Reallocate buffer if needed
+        if (total_read >= DEFAULT_READ_BUFFER_SIZE - 1)
+        {
+            ssize_t current_size = ptr - buffer;
+            char *new_buffer = (char *)realloc(buffer, current_size + DEFAULT_READ_BUFFER_SIZE);
+            if (!new_buffer)
+            {
+                perror("Failed to reallocate buffer");
+                free(buffer);
+                return -1;
+            }
+            buffer = new_buffer;
+            ptr = buffer + current_size;
+        }
+    }
+
+    // Null-terminate the string
+    *ptr = '\0';
+    *out = buffer;
+    return total_read;
 }
 
 // bool handle_INIT(int socket_fd, std::string command) {
