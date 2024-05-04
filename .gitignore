@@ -2,6 +2,7 @@
 frontendserver
 loadbalancer
 smtpserver
+smtpclient
 backendserver
 masterbackendserver
 .vscode
