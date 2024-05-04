@@ -87,6 +87,7 @@ int listen_fd;
 void verbose_print_helper_server(const int &socket_fd, const std::string &msg);
 void verbose_print_helper_client(const int &socket_fd, const std::string &msg);
 bool write_helper(int socket_fd, std::string msg);
+bool create_socket_send_helper(std::string serverID, std::string message, std::string expected_server_response);
 ssize_t read_until_crlf(int sockfd, char **out);
 
 //////////////////////////////// UTILITY HELPERS ////////////////////////////////
@@ -546,6 +547,39 @@ void *frontend_thread_func(void *arg)
                 response = "+OK node marked as alive\r\n";
                 write_helper(socket_fd, response);
                 verbose_print_helper_server(socket_fd, response);
+            }
+            else if (command.substr(0, 4) == "KILL")
+            {
+                std::vector<std::string> command_tokens = split_string(command, ","); // INIT,linhphan -> {INIT, linhphan}
+                if (command_tokens.size() != 2)
+                {
+                    response = "-ERR Incorrect command syntax\r\n";
+                    write_helper(socket_fd, response);
+                    verbose_print_helper_server(socket_fd, response);
+                    continue;
+                }
+                std::string serverID_to_lookup = command_tokens.at(1);
+                if (serverID_group_map.count(serverID_to_lookup) == 0)
+                {
+                    response = "-ERR Invalid server address\r\n";
+                    write_helper(socket_fd, response);
+                    verbose_print_helper_server(socket_fd, response);
+                    continue;
+                }
+                std::string message_to_send = "STDN\r\n";
+                std::string expected_response = "+OK shutting down\r\n";
+                if (create_socket_send_helper(serverID_to_lookup, message_to_send, expected_response))
+                {
+                    response = "+OK storage server shutdown requested\r\n";
+                    write_helper(socket_fd, response);
+                    verbose_print_helper_server(socket_fd, response);
+                }
+                else
+                {
+                    response = "-ERR unable to request storage server shutdown\r\n";
+                    write_helper(socket_fd, response);
+                    verbose_print_helper_server(socket_fd, response);
+                }
             }
             else if (command.substr(0, 4) == "QUIT")
             {
@@ -1035,7 +1069,7 @@ void init_group_primary_map()
     {
         int group_no = kv_pair.first;
         // by default in oru protocol, the first server (smallest port no) in a replication group is the primary
-        group_primary_map[group_no] = kv_pair.second.at(0); 
+        group_primary_map[group_no] = kv_pair.second.at(0);
     }
 }
 
@@ -1129,10 +1163,8 @@ void init_server_status_map()
     }
 }
 
-// bool handle_INIT(int socket_fd, std::string command) {
-
-// }
-
+/// @brief This function marks the specified server's status as "down" if it's still marked as "alive". If the server's status is already "down", then this function doesn't do anything. This function is thread-safe. 
+/// @param server_key serverID whose status might be updated 
 void update_server_status_map_and_group_primary_map(std::string server_key)
 {
     pthread_mutex_lock(&server_status_map_mutex);
@@ -1164,4 +1196,65 @@ void update_server_status_map_and_group_primary_map(std::string server_key)
         std::cout << "new_primary: " << candidate_primary << std::endl;
     }
     pthread_mutex_unlock(&server_status_map_mutex);
+}
+
+/// @brief This helper creates a TCP socket, sends the msg to the specified server, compare the actual response from the server with the expected response, and closes the created socket
+/// @param serverID
+/// @param msg
+/// @param expected_server_response
+/// @return true if receiving expected response from the receiving server, false if any system call fails or there's network partitions
+bool create_socket_send_helper(std::string serverID, std::string message, std::string expected_server_response)
+{
+    std::vector<std::string> temp = split_string(serverID, ":");
+    std::string storage_node_address = temp[0];
+    int storage_node_port = std::stoi(temp[1]);
+    int sockfd = -1;
+    struct sockaddr_in serv_addr;
+    serv_addr.sin_family = AF_INET;
+    serv_addr.sin_port = htons(storage_node_port);
+
+    if (inet_pton(AF_INET, storage_node_address.c_str(), &serv_addr.sin_addr) <= 0)
+    {
+        std::cerr << "Invalid address / Address not supported\n";
+        return false;
+    }
+
+    if ((sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
+    {
+        std::cerr << "Socket creation error\n";
+        return false;
+    }
+
+    if (connect(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0)
+    {
+        std::cerr << "Unable to connect to serverID" << std::endl;
+        return false;
+    }
+
+    char* welcome_message_buffer;
+    read_until_crlf(sockfd, &welcome_message_buffer); // read the welcome message from the target server
+    std::string welcome_message{welcome_message_buffer};
+    std::string expected_welcome_message = "+OK Server ready";
+    // if (welcome_message != expected_welcome_message) {
+    //     std::cerr << "possible network partition" << std::endl; 
+    //     return false; 
+    // }
+
+    if (!write_helper(sockfd, message))
+    {
+        std::cerr << "unable to write to destination server" << std::endl; 
+        return false; 
+    }
+
+    char *buffer;
+    read_until_crlf(sockfd, &buffer);
+    std::string actual_server_response{buffer};
+    std::cout << "actual_server_response: " << actual_server_response << std::endl;
+    close(sockfd);
+    if (expected_server_response == actual_server_response) {
+        return true; 
+    } else {
+        std::cerr << "server response not expected" << std::endl; 
+        return false;
+    }
 }
