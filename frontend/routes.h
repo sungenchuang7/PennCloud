@@ -27,6 +27,7 @@ std::tuple<std::string, std::string, std::string> get_home(ReqInitLine *req_init
 std::tuple<std::string, std::string, std::string> get_inbox(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers);
 std::tuple<std::string, std::string, std::string> get_inbox_message(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers);
 std::tuple<std::string, std::string, std::string> get_change_password(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers);
+std::tuple<std::string, std::string, std::string> get_admin(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers);
 
 // POST ROUTES
 std::tuple<std::string, std::string, std::string> post_login(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body);

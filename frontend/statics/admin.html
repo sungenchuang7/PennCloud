@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Penn Cloud</title>
+</head>
+
+<body>
+    <div class="container">
+        <h1>Admin Console</h1>
+
+        <h2>Servers</h2>
+        <h3>Frontend</h3>
+        <table id="frontendTable">
+            <tr>
+                <th>Server IP Address</th>
+                <th>Status</th>
+            </tr>
+            <tr>
+                <td>127.0.0.1:8080</td>
+                <!-- leave status blank to be filled by backend -->
+                <td>Alive</td>
+            </tr>
+            <tr>
+                <td>127.0.0.1:8081</td>
+                <!-- leave status blank to be filled by backend -->
+                <td>Alive</td>
+            </tr>
+            <tr>
+                <td>127.0.0.1:8082</td>
+                <!-- leave status blank to be filled by backend -->
+                <td>Alive</td>
+            </tr>
+        </table>
+
+        <h3>Backend</h3>
+        <table id="backendTable">
+            <tr>
+                <th>Server IP Address</th>
+                <th>Status</th>
+                <th>Kill</th>
+                <th>Restart</th>
+            </tr>
+            <!-- <tr>
+                <td>127.0.0.1:20011</td>
+                <td>Alive</td>
+                <td><button>Kill</button></td>
+                <td><button>Restart</button></td>
+            </tr>
+            -->
+        </table>
+        <h2>Web Storage Data</h2>
+
+    </div>
+    <script>
+        // const server list will be added here with c++ code
+        // EXAMPLE:
+        // const backend_servers = [
+        //     { server_address: "127.0.0.1:20011", status: "Alive"},
+        //     { server_address: "127.0.0.1:20011", status: "Alive"},
+        //     { server_address: "127.0.0.1:20011", status: "Alive"},
+        // ];
+
+        const frontend_servers = [
+            { server_address: "127.0.0.1:8080", status: "Alive"},
+            { server_address: "127.0.0.1:8081", status: "Alive"},
+            { server_address: "127.0.0.1:8082", status: "Alive"},
+        ];
+        function displayServers() {
+            const backendTable = document.getElementById('backendTable');
+            backend_servers.forEach(server => {
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                <td>${server.server_address}</td>
+                <td>${server.status}</td>
+                <td><button>Kill</button></td>
+                <td><button>Restart</button></td>
+            `;
+                backendTable.appendChild(row);
+            });
+
+            const frontendTable = document.getElementById('frontendTable');
+            frontend_servers.forEach(server => {
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                <td>${server.server_address}</td>
+                <td>${server.status}</td>
+            `;
+                frontendTable.appendChild(row);
+            });
+        }
+
+        window.onload = displayServers;
+
+    </script>
+
+
+</body>
+
+</html>

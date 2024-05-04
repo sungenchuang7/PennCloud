@@ -85,6 +85,18 @@ void *frontendThread(void *args) {
         i++;
       }
     }
+
+    // TODO: check if the message is a request for stat on frontend servers
+    if (strncmp(read_buffer, "STAT", 5) == 0) {
+      std::string response = "HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\n\r\n";
+      std::map<std::string, int>::iterator it;
+      for (it = server_clients.begin(); it != server_clients.end(); it++) {
+        response = response + it->first + " " + std::to_string(it->second) + "\n";
+      }
+      write(comm_fd, response.c_str(), strlen(response.c_str()));
+    }
+
+    // Return map of server_address and number of clients connected to that server
   }
 
   pthread_exit(NULL);

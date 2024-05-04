@@ -170,7 +170,114 @@ std::string get_backend_address(std::string rowkey)
   // Return backend server address
   return command.substr(5);
 }
+std::vector<std::tuple<std::string, std::string>> get_backend_servers_status()
+{
+  // Create socket connection with server
+  int sock = socket(PF_INET, SOCK_STREAM, 0);
+  struct sockaddr_in servaddr;
+  bzero(&servaddr, sizeof(servaddr));
+  servaddr.sin_family = AF_INET;
+  inet_pton(AF_INET, MASTER_SERVER_ADDR.c_str(), &servaddr.sin_addr);
+  servaddr.sin_port = htons(MASTER_SERVER_PORT);
 
+  // Connect to server
+  if (connect(sock, (struct sockaddr *)&servaddr, sizeof(servaddr)) < 0)
+  {
+    return {};
+  }
+
+  // Read for +OK server ready
+  std::string command;
+  char buffer[MAX_BUFF_SIZE];
+  int end_index = 0;
+  bool has_full_command = false;
+
+  // Read from server for line that ends in <CRLF>
+  while (!has_full_command)
+  {
+    char c;
+    if (read(sock, &c, 1) > 0)
+    {
+      buffer[end_index] = c;
+
+      if (end_index >= 1 && c == '\n' && buffer[end_index - 1] == '\r')
+      {
+        has_full_command = true;
+        buffer[end_index - 1] = '\0'; // Replace \r\n with \0
+        command = buffer;
+      }
+
+      end_index++;
+    }
+  }
+
+  if (command.length() < 3 || command.substr(0, 3) != "+OK")
+  {
+    return {};
+  }
+
+  // Make STAT, request
+  std::string request = "STAT\r\n";
+  write(sock, request.c_str(), request.length());
+  // Read response from server
+  bzero(buffer, MAX_BUFF_SIZE);
+  has_full_command = false;
+  end_index = 0;
+
+  while (!has_full_command)
+  {
+    char c;
+    if (read(sock, &c, 1) > 0)
+    {
+      buffer[end_index] = c;
+
+      if (end_index >= 1 && c == '\n' && buffer[end_index - 1] == '\r')
+      {
+        has_full_command = true;
+        buffer[end_index - 1] = '\0'; // Replace \r\n with \0
+        command = buffer;
+      }
+
+      end_index++;
+    }
+  }
+
+  // Close connection
+  close(sock);
+
+  if (command.length() < 3 || command.substr(0, 3) != "+OK")
+  {
+    return {};
+  }
+
+  // Parse response
+
+  // Remove +OK, from response
+  command = command.substr(4);
+
+  // Split response by ,
+  std::vector<std::tuple<std::string, std::string>> servers;
+  std::string delimiter = ",";
+  size_t pos = 0;
+  std::string token;
+  while ((pos = command.find(delimiter)) != std::string::npos)
+  {
+    token = command.substr(0, pos);
+    std::string status;
+    if (token.substr(token.length() - 1) == "0")
+    {
+      status = "Down";
+    }
+    else
+    {
+      status = "Alive";
+    }
+    servers.push_back(std::make_tuple(token.substr(0, token.length() - 2), status));
+    command.erase(0, pos + delimiter.length());
+  }
+
+  return servers;
+}
 // Make a get request to the backend server for value of key
 // Returns error message if request fails
 std::string get_kvs(std::string ip, int port, std::string row, std::string col)
@@ -996,6 +1103,60 @@ std::tuple<std::string, std::string, std::string> get_change_password(ReqInitLin
   return std::make_tuple(init_response, headers, message_body);
 }
 
+std::tuple<std::string, std::string, std::string> get_admin(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers)
+{
+  // Read in HTML file
+  std::ifstream file(STATICS_LOC + "admin.html");
+  std::string message_body;
+
+  if (file.is_open())
+  {
+    std::string line;
+    while (getline(file, line))
+    {
+      message_body += line + "\n";
+    }
+    file.close();
+  }
+  else
+  {
+    std::string response = req_init_line->version + " 404 Not Found\r\n";
+    return std::make_tuple(response, "", "");
+  }
+
+  // Get statuses of backend servers
+  std::vector<std::tuple<std::string, std::string>> backend_servers = get_backend_servers_status();
+
+  std::string insert_tag = "<script>";
+  int insert_index = message_body.find(insert_tag);
+  std::string backend_server_script = "\nconst backend_servers = [\n";
+  for (auto const &server : backend_servers)
+  {
+    backend_server_script += "{";
+    backend_server_script += "server_address: \"" + std::get<0>(server) + "\",";
+    backend_server_script += "status: \"" + std::get<1>(server) + "\",";
+    backend_server_script += "},\n";
+  }
+  backend_server_script += "];\n";
+  message_body.insert(insert_index + insert_tag.length(), backend_server_script);
+
+  // TODO: Get statuses of frontend servers
+
+  // Create inital response line
+  std::string init_response = req_init_line->version + " 200 OK\r\n";
+
+  // Create headers
+  std::string headers;
+
+  // Content Type header
+  headers += "Content-Type: text/html\r\n";
+
+  // Content Length header
+  headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
+
+  // Return response
+  return std::make_tuple(init_response, headers, message_body);
+}
 // FRONTEND POST ROUTES
 
 // Returns map of post body {key, value}
