@@ -1,1 +1,1 @@
-To reset the disk state, remove each "tablet_log_" .txt file from this directory.
+To reset the disk state, remove each .txt file from this directory.
