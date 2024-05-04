@@ -21,6 +21,7 @@ pthread_mutex_t totalActionsLock;  // Lock for accessing totalActions.
 pthread_mutex_t activeTabletLock;  // Lock for accessing activeTablet.
 std::vector<std::shared_timed_mutex> kvsTabletLocks(26);  // The locks for each tablet A-Z. Manages KVS tablet and activity record access.
 
+bool pseudoShutDown = false; 
 bool serverShutDown = false;  // Tracks Ctrl+C command from user.
 int shutDownPipe[2];  // Pipe for communicating shutdown status to threads.
 bool shutDownCleanup = false;  // Signals when thread resources have been cleaned up.
@@ -40,6 +41,7 @@ std::string valueAdded = "+OK Value added\r\n";
 std::string dataOkay = "+OK Enter value ending with <CRLF>.<CRLF>\r\n";
 std::string secondValueOkay = "+OK Enter second value with DATA\r\n";
 std::string firstValueInvalid = "-ERR Value does not equal current value\r\n";
+std::string shutdownRequestResponse = "+OK shutting down\r\n";
 
 // Main entry point for this program. See backendserver.h for function documentation.
 // @returns Exit code 0 for success, else error.
@@ -532,6 +534,27 @@ void* workerThread(void* connectionInfo) {
                                         fprintf(stderr, "DATA acceptance failed to write: %s\n", strerror(errno));
                                     }
                                 }
+                            } else if ((buf[0] == 's' || buf[0] == 'S') && 
+                                    (buf[1] == 't' || buf[1] == 'T') && 
+                                    (buf[2] == 'd' || buf[2] == 'D') &&
+                                    (buf[3] == 'n' || buf[3] == 'N') &&
+                                    (buf[4] == '\r') &&
+                                    (buf[5] == '\n')) {
+                                std::cerr << "STDN received" << std::endl; 
+                                if (write(comm_FD, shutdownRequestResponse.c_str(), shutdownRequestResponse.length()) < 0) {
+                                    fprintf(stderr, "STDN failed to write: %s\n", strerror(errno));
+                                }
+                                serverShutDown = true;
+                                char* shutdownSignal = new char;
+                                *shutdownSignal = 'X';
+
+                                // Separate SIGINT from new output.
+                                fprintf(stderr, "\n");
+
+                                // Write the shutdown signal for threads to see.
+                                write(shutDownPipe[1], shutdownSignal, 1);
+
+                                delete shutdownSignal;
                             } else if ((strlen(buf) > 8) &&
                                        (buf[0] == 'p' || buf[0] == 'P') &&
                                        (buf[1] == 'u' || buf[1] == 'U') &&
@@ -862,24 +885,19 @@ void* workerThread(void* connectionInfo) {
 
         continueReading = false;
     }
-    std::cerr << "shutdown1" << std::endl; 
+    
     if (serverShutDown == false) {
-        std::cerr << "shutdown2" << std::endl; 
         if (clientDisconnected == false) {
-            std::cerr << "shutdown3" << std::endl; 
             // Quit requested. Send farewell message and close this connection.
             write(comm_FD, &quitMessage[0], quitMessage.length());
-            std::cerr << "shutdown4" << std::endl; 
 
             // Debugger output - farewell message.
             if (vFlag == true) {
                 fprintf(stderr, "[%d] S: %s", comm_FD, quitMessage.c_str());
             }
         }
-        std::cerr << "shutdown5" << std::endl; 
         // Close the connection and update active fileDescriptors.
         close(comm_FD);
-        std::cerr << "shutdown6" << std::endl; 
 
         // Debugger output - connection closed.
         if (vFlag == true) {
@@ -916,7 +934,7 @@ void* workerThread(void* connectionInfo) {
 }
 
 void signalHandler(int signal) {
-    std::cerr << "are we here? " << std::endl; 
+    std::cerr << "entered signalHandler" << std::endl; 
     serverShutDown = true;
     char* shutdownSignal = new char;
     *shutdownSignal = 'X';

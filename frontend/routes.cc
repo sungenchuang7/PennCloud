@@ -1257,16 +1257,27 @@ std::tuple<std::string, std::string, std::string> post_signup(ReqInitLine *req_i
 
   // TODO: handle error 
 
+  backend_address_port = get_backend_address("email_" + username);
+  backend_address = backend_address_port.substr(0, backend_address_port.find(":"));
+  backend_port = std::stoi(backend_address_port.substr(backend_address_port.find(":") + 1));
+
   // after creating user file, also create metadata files for file and email
   // create email metadata file
   command = put_kvs(backend_address, backend_port, "email_" + username, "metadata.txt", "Metadata\n", false, ""); // Need to send non empty value
   // TODO: handle error 
+
+  backend_address_port = get_backend_address("file_" + username);
+  backend_address = backend_address_port.substr(0, backend_address_port.find(":"));
+  backend_port = std::stoi(backend_address_port.substr(backend_address_port.find(":") + 1));
   // create file metadata file, and set home directory / to uuid 1
   command = put_kvs(backend_address, backend_port, "file_" + username, "metadata.txt", "/:1\n", false, "");
+
   // create next id column
   command = put_kvs(backend_address, backend_port, "file_" + username, "nextid.txt", "2", false, "");
+
   // create home directory
   command = put_kvs(backend_address, backend_port, "file_" + username, "1.txt", "is_directory:true\nparent:0\nchildren_files:\nchildren_folders:\n", false, "");
+
   
   std::string message_body = "";
   std::string init_response = req_init_line->version + " 303 Success\r\n";
@@ -1600,6 +1611,8 @@ std::tuple<std::string, std::string, std::string> get_storage(ReqInitLine *req_i
   // get username from cookie 
   std::string username = usernames[sid];
 
+  fprintf(stderr, "logged in: %s\n", username.c_str());
+
   // Get path of folder 
   std::string folder_path;
   if (req_init_line->path.length() == 8) {
@@ -1612,8 +1625,16 @@ std::tuple<std::string, std::string, std::string> get_storage(ReqInitLine *req_i
     }
   }
 
+  // Ping backend master for backend server address
+  std::string backend_address_port = get_backend_address("file_" + username);
+  std::string backend_address = backend_address_port.substr(0, backend_address_port.find(":"));
+  int backend_port = std::stoi(backend_address_port.substr(backend_address_port.find(":") + 1));
+  fprintf(stderr, "backend server: %s:%d", backend_address.c_str(), backend_port);
+
   // query backend for the uuid of this folder
-  std::string metadata = get_kvs("127.0.0.1", 7000, "file_" + username, "metadata.txt");
+  std::string metadata = get_kvs(backend_address, backend_port, "file_" + username, "metadata.txt");
+
+  fprintf(stderr, "metadata: %s\n", metadata.c_str());
 
   // parse metadata file for the uuid of the folder
   std::string searchable = folder_path + ":";
@@ -1624,7 +1645,8 @@ std::tuple<std::string, std::string, std::string> get_storage(ReqInitLine *req_i
   std::string uuid = temp.substr(col_ind + 1, end_ind - col_ind - 1) + ".txt";
 
   // use uuid to get folder data
-  std::string folder_data = get_kvs("127.0.0.1", 7000, "file_" + username, uuid);
+  std::string folder_data = get_kvs(backend_address, backend_port, "file_" + username, uuid);
+  fprintf(stderr, "folder_data: %s\n", folder_data.c_str());
 
   // start getting children 
   std::vector<File*> files;
@@ -1759,10 +1781,15 @@ std::tuple<std::string, std::string, std::string> get_file(ReqInitLine *req_init
     file_name = file_name.substr(slash_ind + 1);
     slash_ind = file_name.find("/");
   }
+
+  // Ping backend master for backend server address
+  std::string backend_address_port = get_backend_address("file_" + username);
+  std::string backend_address = backend_address_port.substr(0, backend_address_port.find(":"));
+  int backend_port = std::stoi(backend_address_port.substr(backend_address_port.find(":") + 1));
   
   // TODO: test this
   // query backend for the uuid of this folder
-  std::string metadata = get_kvs("127.0.0.1", 7000, "file_" + username, "metadata.txt");
+  std::string metadata = get_kvs(backend_address, backend_port, "file_" + username, "metadata.txt");
 
   // parse metadata file for the uuid of the folder
   std::string searchable = file_path + ":";
@@ -1773,7 +1800,7 @@ std::tuple<std::string, std::string, std::string> get_file(ReqInitLine *req_init
   std::string uuid = temp.substr(col_ind + 1, end_ind - col_ind - 1) + ".txt";
 
   // use uuid to get file data
-  std::string file_data = get_kvs("127.0.0.1", 7000, "file_" + username, uuid);
+  std::string file_data = get_kvs(backend_address, backend_port, "file_" + username, uuid);
 
   // parse file_data for actual data 
   int data_ind = temp.find("data:\n");
@@ -1872,8 +1899,13 @@ std::tuple<std::string, std::string, std::string> post_file(ReqInitLine *req_ini
   std::string username = usernames[sid];
   fprintf(stderr, "username: %s\n", username.c_str());
 
+  // Ping backend master for backend server address
+  std::string backend_address_port = get_backend_address("file_" + username);
+  std::string backend_address = backend_address_port.substr(0, backend_address_port.find(":"));
+  int backend_port = std::stoi(backend_address_port.substr(backend_address_port.find(":") + 1));
+
   // open metadata file 
-  std::string metadata = get_kvs("127.0.0.1", 7000, "file_" + username, "metadata.txt");
+  std::string metadata = get_kvs(backend_address, backend_port, "file_" + username, "metadata.txt");
   fprintf(stderr, "metadata: %s\n", metadata.c_str());
 
   // parse metadata file for the uuid of the folder
@@ -1886,7 +1918,7 @@ std::tuple<std::string, std::string, std::string> post_file(ReqInitLine *req_ini
   fprintf(stderr, "uuid: %s\n", uuid.c_str());
 
   // use uuid to get folder data
-  std::string folder_data = get_kvs("127.0.0.1", 7000, "file_" + username, uuid);
+  std::string folder_data = get_kvs(backend_address, backend_port, "file_" + username, uuid);
   fprintf(stderr, "folder_data: %s\n", folder_data.c_str());
   
   // update folder_data string to include new file in children files 
@@ -1896,23 +1928,23 @@ std::tuple<std::string, std::string, std::string> post_file(ReqInitLine *req_ini
   std::string new_folder_data = prefolder + file_name + "\n" + postfolder; 
   fprintf(stderr, "new_folder_data: %s\n", new_folder_data.c_str());
   // TODO: handle if this doesn't work later
-  std::string command = put_kvs("127.0.0.1", 7000, "file_" + username, uuid, new_folder_data, true, folder_data);
+  std::string command = put_kvs(backend_address, backend_port, "file_" + username, uuid, new_folder_data, true, folder_data);
 
   // now, access next_uuid to get a uuid for this new file 
-  std::string next_uuid = get_kvs("127.0.0.1", 7000, "file_" + username, "nextid.txt");
+  std::string next_uuid = get_kvs(backend_address, backend_port, "file_" + username, "nextid.txt");
   int new_uuid = std::stoi(next_uuid);
   next_uuid = std::to_string(new_uuid + 1);
 
   //TODO: handle if this doesn't work later
-  command = put_kvs("127.0.0.1", 7000, "file_" + username, "nextid.txt", next_uuid, false, "");
+  command = put_kvs(backend_address, backend_port, "file_" + username, "nextid.txt", next_uuid, false, "");
 
   // now, edit metadata file to contain mapping of file path to this uuid 
   std::string new_metadata = metadata + new_file_name + ":" + std::to_string(new_uuid) + "\n";
   // TODO: handle if this doesn't work later 
-  command = put_kvs("127.0.0.1", 7000, "file_" + username, "metadata.txt", new_metadata, true, metadata);
+  command = put_kvs(backend_address, backend_port, "file_" + username, "metadata.txt", new_metadata, true, metadata);
 
   // finally, create the new file 
-  command = put_kvs("127.0.0.1", 7000, "file_" + username, std::to_string(new_uuid) + ".txt", "is_directory:false\nparent:" + uuid +"\ndata:" + file_info, false, "");
+  command = put_kvs(backend_address, backend_port, "file_" + username, std::to_string(new_uuid) + ".txt", "is_directory:false\nparent:" + uuid +"\ndata:" + file_info, false, "");
 
   std::string message_body = "";
   std::string init_response = req_init_line->version + " 303 Success\r\n";
@@ -1950,8 +1982,13 @@ std::tuple<std::string, std::string, std::string> download_file(ReqInitLine *req
   // get the path name from the url 
   std::string file_path = req_init_line->path.substr(9);
 
+  // Ping backend master for backend server address
+  std::string backend_address_port = get_backend_address("file_" + username);
+  std::string backend_address = backend_address_port.substr(0, backend_address_port.find(":"));
+  int backend_port = std::stoi(backend_address_port.substr(backend_address_port.find(":") + 1));
+
   // open metadata file 
-  std::string metadata = get_kvs("127.0.0.1", 7000, "file_" + username, "metadata.txt");
+  std::string metadata = get_kvs(backend_address, backend_port, "file_" + username, "metadata.txt");
 
   // parse metadata file for the uuid of the file
   std::string searchable = file_path + ":";
@@ -1962,7 +1999,7 @@ std::tuple<std::string, std::string, std::string> download_file(ReqInitLine *req
   std::string uuid = temp.substr(col_ind + 1, end_ind - col_ind - 1) + ".txt";
 
   // open file
-  std::string file_data = get_kvs("127.0.0.1", 7000, "file_" + username, uuid);
+  std::string file_data = get_kvs(backend_address, backend_port, "file_" + username, uuid);
   // parse file for data
   int data_index = file_data.find("data:");
   file_data = file_data.substr(data_index + 5);
