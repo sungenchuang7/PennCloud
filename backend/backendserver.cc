@@ -62,6 +62,8 @@ int main(int argc, char *argv[]) {
     // Establish connections and dispatch threads to handle them.
     connectionManager();
 
+    std::cerr << "end of main" << std::endl;
+
     return 0;
 }
 
@@ -451,6 +453,8 @@ void* workerThread(void* connectionInfo) {
         }
 
         numRead = read(comm_FD, tempBuf, 99);
+        std::cerr << "numRead???: " << numRead << std::endl;
+
 
         // Client has disconnected without requesting QUIT or read() failed. Terminate thread.
         if (numRead <= 0) {
@@ -459,6 +463,7 @@ void* workerThread(void* connectionInfo) {
         }
 
         tempBuf[numRead] = '\0';
+        std::cerr << "tempBuf???: " << tempBuf << std::endl;
         
         // Copy contents of temp array into full array.
         strncpy(buf + strlen(buf), tempBuf, numRead);
@@ -857,20 +862,24 @@ void* workerThread(void* connectionInfo) {
 
         continueReading = false;
     }
-
+    std::cerr << "shutdown1" << std::endl; 
     if (serverShutDown == false) {
+        std::cerr << "shutdown2" << std::endl; 
         if (clientDisconnected == false) {
+            std::cerr << "shutdown3" << std::endl; 
             // Quit requested. Send farewell message and close this connection.
             write(comm_FD, &quitMessage[0], quitMessage.length());
+            std::cerr << "shutdown4" << std::endl; 
 
             // Debugger output - farewell message.
             if (vFlag == true) {
                 fprintf(stderr, "[%d] S: %s", comm_FD, quitMessage.c_str());
             }
         }
-
+        std::cerr << "shutdown5" << std::endl; 
         // Close the connection and update active fileDescriptors.
         close(comm_FD);
+        std::cerr << "shutdown6" << std::endl; 
 
         // Debugger output - connection closed.
         if (vFlag == true) {
@@ -902,10 +911,12 @@ void* workerThread(void* connectionInfo) {
         delete valueData;
     }
 
+    std::cerr << "before exiting worker" << std::endl;
     pthread_exit(NULL);
 }
 
 void signalHandler(int signal) {
+    std::cerr << "are we here? " << std::endl; 
     serverShutDown = true;
     char* shutdownSignal = new char;
     *shutdownSignal = 'X';

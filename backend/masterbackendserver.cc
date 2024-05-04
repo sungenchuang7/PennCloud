@@ -93,8 +93,10 @@ ssize_t read_until_crlf(int sockfd, char **out);
 // std::string get_serverID(int server_index);
 void init_tablet_storage_map();
 void init_group_primary_map();
+void init_server_status_map();
 void start_heartbeat_monitoring();
 int redirect(char first_char);
+void update_server_status_map_and_group_primary_map(std::string server_key);
 
 int main(int argc, char *argv[])
 {
@@ -148,6 +150,8 @@ int main(int argc, char *argv[])
 
     init_tablet_storage_map();
     init_group_primary_map();
+    init_server_status_map();
+
     start_heartbeat_monitoring();
 
     // heartbeat_arg_ptrs.resize(num_servers);
@@ -458,8 +462,9 @@ void *frontend_thread_func(void *arg)
                 verbose_print_helper_server(socket_fd, response);
                 pthread_mutex_unlock(&server_status_map_mutex);
             }
-            else if (command == "GTPM")
+            else if (command.substr(0, 4) == "GTPM")
             {
+                std::cout << "here1" << std::endl;
                 std::vector<std::string> command_tokens = split_string(command, ","); // INIT,linhphan -> {INIT, linhphan}
                 if (command_tokens.size() != 2)
                 {
@@ -476,13 +481,14 @@ void *frontend_thread_func(void *arg)
                     verbose_print_helper_server(socket_fd, response);
                     continue;
                 }
+                std::cout << "here2" << std::endl;
                 int server_group_no = serverID_group_map.at(serverID_to_lookup);
                 std::string primaryID = group_primary_map.at(server_group_no);
-                response += "+OK " + primaryID;
+                response += "+OK " + primaryID + "\r\n";
                 write_helper(socket_fd, response);
                 verbose_print_helper_server(socket_fd, response);
             }
-            else if (command == "GTGP")
+            else if (command.substr(0, 4) == "GTGP")
             {
                 std::vector<std::string> command_tokens = split_string(command, ","); // INIT,linhphan -> {INIT, linhphan}
                 if (command_tokens.size() != 2)
@@ -511,11 +517,11 @@ void *frontend_thread_func(void *arg)
                         response += serverID + ",";
                     }
                 }
-                response = response.substr(0, response.size() - 1); // remove last char (extra ,)
+                response = response.substr(0, response.size() - 1) + "\r\n"; // remove last char (extra ,)
                 write_helper(socket_fd, response);
                 verbose_print_helper_server(socket_fd, response);
             }
-            else if (command == "RCVY")
+            else if (command.substr(0, 4) == "RCVY")
             {
                 std::vector<std::string> command_tokens = split_string(command, ","); // INIT,linhphan -> {INIT, linhphan}
                 if (command_tokens.size() != 2)
@@ -533,12 +539,15 @@ void *frontend_thread_func(void *arg)
                     verbose_print_helper_server(socket_fd, response);
                     continue;
                 }
-                down_servers.erase(command_tokens.at(1));
-                response = "+OK\r\n";
+                // down_servers.erase(command_tokens.at(1));
+                // pthread_mutex_lock(&server_status_map_mutex);
+                server_status_map.at(command_tokens.at(1)) = true; 
+                // pthread_mutex_unlock(&server_status_map_mutex);
+                response = "+OK node marked as alive\r\n";
                 write_helper(socket_fd, response);
                 verbose_print_helper_server(socket_fd, response);
             }
-            else if (command == "QUIT")
+            else if (command.substr(0, 4) == "QUIT")
             {
                 response = "+OK Goodbye!\r\n";
                 write_helper(socket_fd, response);
@@ -547,6 +556,7 @@ void *frontend_thread_func(void *arg)
             }
             else
             {
+                std::cout << "here3" << std::endl;
                 response = "-ERR unrecognizable command\r\n";
                 write_helper(socket_fd, response);
                 verbose_print_helper_server(socket_fd, response);
@@ -919,7 +929,15 @@ void *heartbeat_thread_func(void *arg)
 
         if (connect(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0)
         {
-            server_status_map[server_key] = false; // cannot connect, assume server is dead
+            // pthread_mutex_lock(&server_status_map_mutex);
+            // cannot connect, assume server is dead
+            if (!server_status_map.at(server_key))
+            {             // if its status is already marked as down
+                // pthread_mutex_unlock(&server_status_map_mutex);
+                continue; // don't have to mark it as down again
+            }
+            update_server_status_map_and_group_primary_map(server_key);
+            // pthread_mutex_unlock(&server_status_map_mutex);
             if (debug_mode)
             {
                 perror("Errno: ");
@@ -928,9 +946,9 @@ void *heartbeat_thread_func(void *arg)
             continue;
         }
 
-        std::string heartbeat_message = "HRBT\r\n";
-        write_helper(sockfd, heartbeat_message);
-        verbose_print_helper_server(sockfd, heartbeat_message);
+        // std::string heartbeat_message = "HRBT\r\n";
+        // write_helper(sockfd, heartbeat_message);
+        // verbose_print_helper_server(sockfd, heartbeat_message);
 
         struct timeval tv;
         tv.tv_sec = timeout_interval;
@@ -938,17 +956,52 @@ void *heartbeat_thread_func(void *arg)
         setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof tv);
 
         char buffer[DEFAULT_READ_BUFFER_SIZE] = {0};
-        int valread = recv(sockfd, buffer, DEFAULT_READ_BUFFER_SIZE, 0);
+        int bytes_received = recv(sockfd, buffer, DEFAULT_READ_BUFFER_SIZE, 0);
 
-        bool is_alive = (valread > 0);
+        bool is_alive = (bytes_received > 0);
 
         if (down_servers.count(server_key) > 0)
         {
             continue;
         }
 
-        pthread_mutex_lock(&server_status_map_mutex);
-        server_status_map[server_key] = is_alive;
+        if (!is_alive) // if it's down
+        {
+            // pthread_mutex_lock(&server_status_map_mutex);
+            // cannot connect, assume server is dead
+            if (!server_status_map.at(server_key))
+            {             // if its status is already marked as down
+                // pthread_mutex_unlock(&server_status_map_mutex);
+                continue; // don't have to mark it as down again
+            }
+            update_server_status_map_and_group_primary_map(server_key);
+            // pthread_mutex_unlock(&server_status_map_mutex);
+        }
+        else
+        {
+            // send back QUIT to storage server so connection can be closed properly
+            std::string response = "QUIT\r\n";
+            write_helper(sockfd, response);
+
+            char *quit_response;
+            ssize_t result = read_until_crlf(sockfd, &quit_response);
+            if (debug_mode)
+            {
+                if (result > 0)
+                {
+                    printf("quit_response: %s", quit_response);
+                }
+                else if (result == 0)
+                {
+                    printf("Connection closed by peer\n");
+                }
+                else
+                {
+                    printf("Error reading from socket\n");
+                }
+            }
+            free(quit_response);
+        }
         if (debug_mode)
         {
             if (is_alive)
@@ -960,54 +1013,47 @@ void *heartbeat_thread_func(void *arg)
                 std::cout << server_key << " is dead!" << std::endl;
             }
         }
-        pthread_mutex_unlock(&server_status_map_mutex);
 
-        if (is_alive)
-        {
-            std::string response = "QUIT\r\n";
-            write_helper(sockfd, response);
+        // if (is_alive)
+        // {
+        //     std::string response = "QUIT\r\n";
+        //     write_helper(sockfd, response);
 
-            char *data;
-            ssize_t result = read_until_crlf(sockfd, &data);
-            if (result > 0)
-            {
-                printf("Received: %s", data);
-            }
-            else if (result == 0)
-            {
-                printf("Connection closed by peer\n");
-            }
-            else
-            {
-                printf("Error reading from socket\n");
-            }
-            std::string data_string{data};
-            if (data_string == "+OK Goodbye!\r\n") {
-                std::cout << "Good" << std::endl;
-            } else {
-                std::cout << "Bad" << std::endl;
-            }
-            free(data);
-            // check if storage server sends something back (14 chars)
-            // char buffer[DEFAULT_READ_BUFFER_SIZE] = {0};
-            // int valread = recv(sockfd, buffer, DEFAULT_READ_BUFFER_SIZE, 0);
-        }
-        else
-        {
-            down_servers.insert(server_key);
-            int group_no = serverID_group_map.at(server_key);
-            if (group_primary_map.at(group_no) == server_key)
-            { // if the down server is the primary of the group
-                std::string serverID_2 = tablet_storage_map.at(group_no).front();
-                while (!server_status_map.at(serverID_2))
-                {
-                    tablet_storage_map.at(group_no).erase(tablet_storage_map.at(group_no).begin());
-                    tablet_storage_map.at(group_no).push_back(serverID_2);
-                    serverID_2 = tablet_storage_map.at(group_no).front();
-                }
-                group_primary_map.at(group_no) = serverID_2;
-            }
-        }
+        //     char *quit_response;
+        //     ssize_t result = read_until_crlf(sockfd, &quit_response);
+        //     if (debug_mode)
+        //     {
+        //         if (result > 0)
+        //         {
+        //             printf("quit_response: %s", quit_response);
+        //         }
+        //         else if (result == 0)
+        //         {
+        //             printf("Connection closed by peer\n");
+        //         }
+        //         else
+        //         {
+        //             printf("Error reading from socket\n");
+        //         }
+        //     }
+        //     free(quit_response);
+        // }
+        // else
+        // {
+        //     down_servers.insert(server_key);
+        //     int group_no = serverID_group_map.at(server_key);
+        //     if (group_primary_map.at(group_no) == server_key)
+        //     { // if the down server is the primary of the group
+        //         std::string serverID_2 = tablet_storage_map.at(group_no).front();
+        //         while (!server_status_map.at(serverID_2))
+        //         {
+        //             tablet_storage_map.at(group_no).erase(tablet_storage_map.at(group_no).begin());
+        //             tablet_storage_map.at(group_no).push_back(serverID_2);
+        //             serverID_2 = tablet_storage_map.at(group_no).front();
+        //         }
+        //         group_primary_map.at(group_no) = serverID_2;
+        //     }
+        // }
 
         // sleep(1);
         close(sockfd); // storage node shuts itself down if detecting this socket is closed.
@@ -1164,6 +1210,40 @@ ssize_t read_until_crlf(int sockfd, char **out)
     return total_read;
 }
 
+/// @brief Initalize the status of each storage node to be alive
+void init_server_status_map()
+{
+    for (const std::string &serverID : config_serverIDs)
+    {
+        server_status_map[serverID] = true;
+    }
+}
+
 // bool handle_INIT(int socket_fd, std::string command) {
 
 // }
+
+void update_server_status_map_and_group_primary_map(std::string server_key)
+{
+    std::cout << server_key << " is down!" << std::endl;
+    server_status_map.at(server_key) = false;         // update the status of the server to be dead
+    int group_no = serverID_group_map.at(server_key); // get the replication group number of the server
+    if (group_primary_map.at(group_no) == server_key) // if the detected down node is the primary of the group
+    {
+        std::cout << server_key << " is actually the primary!" << std::endl;
+        // pick the front node in the group server list as potential new primary
+        std::string candidate_primary = tablet_storage_map.at(group_no).front();
+        // while this node is also down
+        while (!server_status_map.at(candidate_primary))
+        {
+            // pop the front node from the list
+            tablet_storage_map.at(group_no).erase(tablet_storage_map.at(group_no).begin());
+            // push it back
+            tablet_storage_map.at(group_no).push_back(candidate_primary);
+            // pick the new front node as potential new primary
+            candidate_primary = tablet_storage_map.at(group_no).front();
+        }
+        group_primary_map.at(group_no) = candidate_primary;
+        std::cout << "new_primary: " << candidate_primary << std::endl;
+    }
+}
