@@ -87,16 +87,67 @@ void *frontendThread(void *args) {
     }
 
     // TODO: check if the message is a request for stat on frontend servers
-    if (strncmp(read_buffer, "STAT", 5) == 0) {
-      std::string response = "HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\n\r\n";
-      std::map<std::string, int>::iterator it;
-      for (it = server_clients.begin(); it != server_clients.end(); it++) {
-        response = response + it->first + " " + std::to_string(it->second) + "\n";
+    if (strncmp(read_buffer, "STAT", 4) == 0) {
+
+      // Get data for servers
+      std::string response_8080 = "127.0.0.1:8080,";
+      std::string response_8081 = "127.0.0.1:8081,";
+      std::string response_8082 = "127.0.0.1:8082,";
+      std::map<std::string, std::string>::iterator real_server_address_it;
+      for (real_server_address_it = real_server_address.begin(); real_server_address_it != real_server_address.end(); real_server_address_it++) {
+        if (real_server_address_it->second == "127.0.0.1:8080") {
+          response_8080 += "Alive,";
+          response_8080 += std::to_string(server_clients[real_server_address_it->first]);
+        }
+
+        if (real_server_address_it->second == "127.0.0.1:8081") {
+          response_8081 += "Alive,";
+          response_8081 += std::to_string(server_clients[real_server_address_it->first]);
+        }
+
+        if (real_server_address_it->second == "127.0.0.1:8082") {
+          response_8082 += "Alive,";
+          response_8082 += std::to_string(server_clients[real_server_address_it->first]);
+        }
+      }
+
+      if (response_8080 == "127.0.0.1:8080,")
+      {
+        response_8080 += "Down,0";
+      }
+
+      if (response_8081 == "127.0.0.1:8081,")
+      {
+        response_8081 += "Down,0";
+      }
+
+      if (response_8082 == "127.0.0.1:8082,")
+      {
+        response_8082 += "Down,0";
+      }
+      if (vflag) {
+        // print out server_clients
+        std::map<std::string, int>::iterator it;
+        std::cerr << "server_clients: " << std::endl;
+        for (it = server_clients.begin(); it != server_clients.end(); it++) {
+          std::cerr << it->first << " " << it->second << std::endl;
+        }
+
+
+        // print out real server address
+        std::cerr << "real_server_address: " << std::endl;
+        for (real_server_address_it = real_server_address.begin(); real_server_address_it != real_server_address.end(); real_server_address_it++) {
+          std::cerr << real_server_address_it->first << " " << real_server_address_it->second << std::endl;
+        }
+      }
+
+      // Send data to frontend server
+      std::string response = response_8080 + "\n" + response_8081 + "\n" + response_8082 + "\n\r\n";
+      if (vflag) {
+        std::cerr << "response: " << response << std::endl;
       }
       write(comm_fd, response.c_str(), strlen(response.c_str()));
     }
-
-    // Return map of server_address and number of clients connected to that server
   }
 
   pthread_exit(NULL);

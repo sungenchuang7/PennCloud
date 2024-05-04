@@ -17,22 +17,13 @@
             <tr>
                 <th>Server IP Address</th>
                 <th>Status</th>
+                <th>Number of connections</th>
             </tr>
-            <tr>
+            <!-- <tr>
                 <td>127.0.0.1:8080</td>
-                <!-- leave status blank to be filled by backend -->
                 <td>Alive</td>
-            </tr>
-            <tr>
-                <td>127.0.0.1:8081</td>
-                <!-- leave status blank to be filled by backend -->
-                <td>Alive</td>
-            </tr>
-            <tr>
-                <td>127.0.0.1:8082</td>
-                <!-- leave status blank to be filled by backend -->
-                <td>Alive</td>
-            </tr>
+                <td>1</td>
+            </tr> -->
         </table>
 
         <h3>Backend</h3>
@@ -63,11 +54,11 @@
         //     { server_address: "127.0.0.1:20011", status: "Alive"},
         // ];
 
-        const frontend_servers = [
-            { server_address: "127.0.0.1:8080", status: "Alive"},
-            { server_address: "127.0.0.1:8081", status: "Alive"},
-            { server_address: "127.0.0.1:8082", status: "Alive"},
-        ];
+        // const frontend_servers = [
+        //     { server_address: "127.0.0.1:8080", status: "Alive", num_connections: 1},
+        //     { server_address: "127.0.0.1:8081", status: "Alive", num_connections: 2},
+        //     { server_address: "127.0.0.1:8082", status: "Alive", num_connections: 3},
+        // ];
         function displayServers() {
             const backendTable = document.getElementById('backendTable');
             backend_servers.forEach(server => {
@@ -87,6 +78,7 @@
                 row.innerHTML = `
                 <td>${server.server_address}</td>
                 <td>${server.status}</td>
+                <td>${server.num_connections}</td>
             `;
                 frontendTable.appendChild(row);
             });

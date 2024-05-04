@@ -278,6 +278,78 @@ std::vector<std::tuple<std::string, std::string>> get_backend_servers_status()
 
   return servers;
 }
+std::vector<std::tuple<std::string, std::string, std::string>> get_frontend_servers_status()
+{
+  // Create socket connection with loadbalancer
+  int sock = socket(PF_INET, SOCK_STREAM, 0);
+  struct sockaddr_in lbaddr;
+  bzero(&lbaddr, sizeof(lbaddr));
+  lbaddr.sin_family = AF_INET;
+  inet_pton(AF_INET, MASTER_SERVER_ADDR.c_str(), &lbaddr.sin_addr);
+  lbaddr.sin_port = htons(5000);
+
+  // Connect to loadbalancer
+  if (connect(sock, (struct sockaddr *)&lbaddr, sizeof(lbaddr)) < 0)
+  {
+    return {};
+  }
+
+  // Send STAT
+  std::string request = "STAT\r\n";
+  write(sock, request.c_str(), request.length());
+
+  // Read response
+  char buffer[MAX_BUFF_SIZE];
+  int end_index = 0;
+  bool has_full_command = false;
+  std::string command;
+
+  // Read from server for line that ends in <CRLF>
+  while (!has_full_command)
+  {
+    char c;
+    if (read(sock, &c, 1) > 0)
+    {
+      buffer[end_index] = c;
+
+      if (end_index >= 1 && c == '\n' && buffer[end_index - 1] == '\r')
+      {
+        has_full_command = true;
+        buffer[end_index - 1] = '\0'; // Replace \r\n with \0
+        command = buffer;
+      }
+
+      end_index++;
+    }
+  }
+
+  std::vector<std::tuple<std::string, std::string, std::string>> servers;
+  // Parse response
+  // 127.0.0.1:8080,1,1\n
+  // 127.0.0.1:8081,1,1\n
+  // 127.0.0.1:8082,1,0\n
+
+  // Split response by \n
+  std::string delimiter = "\n";
+  size_t pos = 0;
+  std::string token;
+  while ((pos = command.find(delimiter)) != std::string::npos)
+  {
+    token = command.substr(0, pos);
+    std::cerr << "token: " << token << std::endl;
+    std::string address = token.substr(0, token.find(","));
+    token.erase(0, token.find(",") + 1);
+    std::string status = token.substr(0, token.find(","));
+    token.erase(0, token.find(",") + 1);
+    std::string num_clients = token;
+    servers.push_back(std::make_tuple(address, status, num_clients));
+    command.erase(0, pos + delimiter.length());
+  }
+
+  // Return vector of tuples {server_address, status, num_clients}
+  return servers;
+}
+
 // Make a get request to the backend server for value of key
 // Returns error message if request fails
 std::string get_kvs(std::string ip, int port, std::string row, std::string col)
@@ -1141,6 +1213,18 @@ std::tuple<std::string, std::string, std::string> get_admin(ReqInitLine *req_ini
   message_body.insert(insert_index + insert_tag.length(), backend_server_script);
 
   // TODO: Get statuses of frontend servers
+  std::vector<std::tuple<std::string, std::string, std::string>> frontend_servers = get_frontend_servers_status();
+  std::string frontend_server_script = "\nconst frontend_servers = [\n";
+  for (auto const &server : frontend_servers)
+  {
+    frontend_server_script += "{";
+    frontend_server_script += "server_address: \"" + std::get<0>(server) + "\",";
+    frontend_server_script += "status: \"" + std::get<1>(server) + "\",";
+    frontend_server_script += "num_connections: " + std::get<2>(server) + ",";
+    frontend_server_script += "},\n";
+  }
+  frontend_server_script += "];\n";
+  message_body.insert(insert_index + insert_tag.length(), frontend_server_script);
 
   // Create inital response line
   std::string init_response = req_init_line->version + " 200 OK\r\n";
