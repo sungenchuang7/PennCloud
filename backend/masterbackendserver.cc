@@ -540,9 +540,9 @@ void *frontend_thread_func(void *arg)
                     continue;
                 }
                 // down_servers.erase(command_tokens.at(1));
-                // pthread_mutex_lock(&server_status_map_mutex);
-                server_status_map.at(command_tokens.at(1)) = true; 
-                // pthread_mutex_unlock(&server_status_map_mutex);
+                pthread_mutex_lock(&server_status_map_mutex);
+                server_status_map.at(command_tokens.at(1)) = true;
+                pthread_mutex_unlock(&server_status_map_mutex);
                 response = "+OK node marked as alive\r\n";
                 write_helper(socket_fd, response);
                 verbose_print_helper_server(socket_fd, response);
@@ -929,15 +929,7 @@ void *heartbeat_thread_func(void *arg)
 
         if (connect(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0)
         {
-            // pthread_mutex_lock(&server_status_map_mutex);
-            // cannot connect, assume server is dead
-            if (!server_status_map.at(server_key))
-            {             // if its status is already marked as down
-                // pthread_mutex_unlock(&server_status_map_mutex);
-                continue; // don't have to mark it as down again
-            }
             update_server_status_map_and_group_primary_map(server_key);
-            // pthread_mutex_unlock(&server_status_map_mutex);
             if (debug_mode)
             {
                 perror("Errno: ");
@@ -967,15 +959,7 @@ void *heartbeat_thread_func(void *arg)
 
         if (!is_alive) // if it's down
         {
-            // pthread_mutex_lock(&server_status_map_mutex);
-            // cannot connect, assume server is dead
-            if (!server_status_map.at(server_key))
-            {             // if its status is already marked as down
-                // pthread_mutex_unlock(&server_status_map_mutex);
-                continue; // don't have to mark it as down again
-            }
             update_server_status_map_and_group_primary_map(server_key);
-            // pthread_mutex_unlock(&server_status_map_mutex);
         }
         else
         {
@@ -1014,48 +998,6 @@ void *heartbeat_thread_func(void *arg)
             }
         }
 
-        // if (is_alive)
-        // {
-        //     std::string response = "QUIT\r\n";
-        //     write_helper(sockfd, response);
-
-        //     char *quit_response;
-        //     ssize_t result = read_until_crlf(sockfd, &quit_response);
-        //     if (debug_mode)
-        //     {
-        //         if (result > 0)
-        //         {
-        //             printf("quit_response: %s", quit_response);
-        //         }
-        //         else if (result == 0)
-        //         {
-        //             printf("Connection closed by peer\n");
-        //         }
-        //         else
-        //         {
-        //             printf("Error reading from socket\n");
-        //         }
-        //     }
-        //     free(quit_response);
-        // }
-        // else
-        // {
-        //     down_servers.insert(server_key);
-        //     int group_no = serverID_group_map.at(server_key);
-        //     if (group_primary_map.at(group_no) == server_key)
-        //     { // if the down server is the primary of the group
-        //         std::string serverID_2 = tablet_storage_map.at(group_no).front();
-        //         while (!server_status_map.at(serverID_2))
-        //         {
-        //             tablet_storage_map.at(group_no).erase(tablet_storage_map.at(group_no).begin());
-        //             tablet_storage_map.at(group_no).push_back(serverID_2);
-        //             serverID_2 = tablet_storage_map.at(group_no).front();
-        //         }
-        //         group_primary_map.at(group_no) = serverID_2;
-        //     }
-        // }
-
-        // sleep(1);
         close(sockfd); // storage node shuts itself down if detecting this socket is closed.
     }
 
@@ -1079,44 +1021,11 @@ void init_tablet_storage_map()
         {
             group = 3;
         }
-
+        // The server index in our protocol is 1-indexed, but std::vector is 0-indexed
         std::string cur_serverID = config_serverIDs.at(i - 1);
-        // int primary = i;
-        // int rep1 = -1;
-        // int rep2 = -1;
 
-        // if ((i + 1) > num_servers)
-        // {
-        //     rep1 = (i + 1) % num_servers;
-        // }
-        // else
-        // {
-        //     rep1 = i + 1;
-        // }
-        // if ((i + 2) > num_servers)
-        // {
-        //     rep2 = (i + 2) % num_servers;
-        // }
-        // else
-        // {
-        //     rep2 = i + 2;
-        // }
-        // if (debug_mode)
-        // {
-        //     std::cout << "primary: " << primary << std::endl;
-        //     std::cout << "rep1: " << rep1 << std::endl;
-        //     std::cout << "rep2: " << rep2 << std::endl;
-        // }
         tablet_storage_map[group].push_back(cur_serverID);
         serverID_group_map[cur_serverID] = group;
-
-        // tablet_storage_map[i].push_back(config_serverIDs.at(rep1 - 1));
-        // tablet_storage_map[i].push_back(config_serverIDs.at(rep2 - 1));
-    }
-
-    if (debug_mode)
-    {
-        std::cout << "tablet_storage_map.count(2): " << tablet_storage_map.count(2) << std::endl;
     }
 }
 
@@ -1125,7 +1034,8 @@ void init_group_primary_map()
     for (const auto &kv_pair : tablet_storage_map)
     {
         int group_no = kv_pair.first;
-        group_primary_map[group_no] = kv_pair.second.at(0); // pick the first node in a group as primary by default
+        // by default in oru protocol, the first server (smallest port no) in a replication group is the primary
+        group_primary_map[group_no] = kv_pair.second.at(0); 
     }
 }
 
@@ -1225,6 +1135,13 @@ void init_server_status_map()
 
 void update_server_status_map_and_group_primary_map(std::string server_key)
 {
+    pthread_mutex_lock(&server_status_map_mutex);
+    // cannot connect, assume server is dead
+    if (!server_status_map.at(server_key))
+    { // if its status is already marked as down
+        pthread_mutex_unlock(&server_status_map_mutex);
+        return; // don't have to mark it as down again
+    }
     std::cout << server_key << " is down!" << std::endl;
     server_status_map.at(server_key) = false;         // update the status of the server to be dead
     int group_no = serverID_group_map.at(server_key); // get the replication group number of the server
@@ -1246,4 +1163,5 @@ void update_server_status_map_and_group_primary_map(std::string server_key)
         group_primary_map.at(group_no) = candidate_primary;
         std::cout << "new_primary: " << candidate_primary << std::endl;
     }
+    pthread_mutex_unlock(&server_status_map_mutex);
 }
