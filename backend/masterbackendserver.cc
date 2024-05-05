@@ -558,8 +558,8 @@ void *frontend_thread_func(void *arg)
                     verbose_print_helper_server(socket_fd, response);
                     continue;
                 }
-                std::string serverID_to_lookup = command_tokens.at(1);
-                if (serverID_group_map.count(serverID_to_lookup) == 0)
+                std::string serverID_to_shutdown = command_tokens.at(1);
+                if (serverID_group_map.count(serverID_to_shutdown) == 0)
                 {
                     response = "-ERR Invalid server address\r\n";
                     write_helper(socket_fd, response);
@@ -568,11 +568,12 @@ void *frontend_thread_func(void *arg)
                 }
                 std::string message_to_send = "STDN\r\n";
                 std::string expected_response = "+OK shutting down\r\n";
-                if (create_socket_send_helper(serverID_to_lookup, message_to_send, expected_response))
+                if (create_socket_send_helper(serverID_to_shutdown, message_to_send, expected_response))
                 {
                     response = "+OK storage server shutdown requested\r\n";
                     write_helper(socket_fd, response);
                     verbose_print_helper_server(socket_fd, response);
+                    update_server_status_map_and_group_primary_map(serverID_to_shutdown);
                 }
                 else
                 {

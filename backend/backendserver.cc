@@ -569,6 +569,7 @@ void* workerThread(void* connectionInfo) {
                                     fprintf(stderr, "RSTT failed to write: %s\n", strerror(errno));
                                 }
                                 // TODO: Add code to start recovery process here.
+                                // MUST to make sure pseudoShutDown is set to TRUE when RECOVERING
 
 
                             } else if ((strlen(buf) > 8) &&
