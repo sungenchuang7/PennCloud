@@ -450,7 +450,7 @@ void* workerThread(void* connectionInfo) {
         int returnValue = select(comm_FD + 1, &fdSet, NULL, NULL, NULL);
 
         // Server shutdown enabled.
-        if (serverShutDown == true) {
+        if (serverShutDown == true || pseudoShutDown == true) {
             break;
         }
 
@@ -544,7 +544,9 @@ void* workerThread(void* connectionInfo) {
                                 if (write(comm_FD, shutdownRequestResponse.c_str(), shutdownRequestResponse.length()) < 0) {
                                     fprintf(stderr, "STDN failed to write: %s\n", strerror(errno));
                                 }
-                                serverShutDown = true;
+                                pseudoShutDown = true;
+                                // serverShutDown = true; 
+
                                 char* shutdownSignal = new char;
                                 *shutdownSignal = 'X';
 
@@ -886,7 +888,48 @@ void* workerThread(void* connectionInfo) {
         continueReading = false;
     }
     
-    if (serverShutDown == false) {
+    // if (serverShutDown == false) {
+    //     if (clientDisconnected == false) {
+    //         // Quit requested. Send farewell message and close this connection.
+    //         write(comm_FD, &quitMessage[0], quitMessage.length());
+
+    //         // Debugger output - farewell message.
+    //         if (vFlag == true) {
+    //             fprintf(stderr, "[%d] S: %s", comm_FD, quitMessage.c_str());
+    //         }
+    //     }
+    //     // Close the connection and update active fileDescriptors.
+    //     close(comm_FD);
+
+    //     // Debugger output - connection closed.
+    //     if (vFlag == true) {
+    //         fprintf(stderr, "[%d] Connection closed\n", comm_FD);
+    //     }
+    // } else {
+    //     // Server shutting down. Write message to client and close connection.
+    //     write(comm_FD, &serverShutDownMessage[0], serverShutDownMessage.length());
+
+    //     // Debugger output - server shutdown enabled and connection closed.
+    //     if (vFlag == true) {
+    //         fprintf(stderr, "[%d] S: %s", comm_FD, serverShutDownMessage.c_str());
+    //         fprintf(stderr, "[%d] Connection closed\n", comm_FD);
+    //     }
+
+    //     close(comm_FD);
+    // }
+
+    if (serverShutDown || pseudoShutDown) {
+        // Server shutting down. Write message to client and close connection.
+        write(comm_FD, &serverShutDownMessage[0], serverShutDownMessage.length());
+
+        // Debugger output - server shutdown enabled and connection closed.
+        if (vFlag == true) {
+            fprintf(stderr, "[%d] S: %s", comm_FD, serverShutDownMessage.c_str());
+            fprintf(stderr, "[%d] Connection closed\n", comm_FD);
+        }
+
+        close(comm_FD);
+    } else {
         if (clientDisconnected == false) {
             // Quit requested. Send farewell message and close this connection.
             write(comm_FD, &quitMessage[0], quitMessage.length());
@@ -903,17 +946,6 @@ void* workerThread(void* connectionInfo) {
         if (vFlag == true) {
             fprintf(stderr, "[%d] Connection closed\n", comm_FD);
         }
-    } else {
-        // Server shutting down. Write message to client and close connection.
-        write(comm_FD, &serverShutDownMessage[0], serverShutDownMessage.length());
-
-        // Debugger output - server shutdown enabled and connection closed.
-        if (vFlag == true) {
-            fprintf(stderr, "[%d] S: %s", comm_FD, serverShutDownMessage.c_str());
-            fprintf(stderr, "[%d] Connection closed\n", comm_FD);
-        }
-
-        close(comm_FD);
     }
 
     // Update active thread information, clean up memory, and exit.

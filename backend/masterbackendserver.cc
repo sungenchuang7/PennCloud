@@ -621,6 +621,7 @@ void remove_connection(int socket_fd)
         if (*(comm_fds_vector.at(i)) == socket_fd)
         {
             free(comm_fds_vector.at(i));
+            comm_fds_vector.at(i) = nullptr; // see if it works
             index = i;
 
             std::cout << "server is calling free() to release resources..." << std::endl;
@@ -1018,7 +1019,7 @@ void *heartbeat_thread_func(void *arg)
                     printf("Error reading from socket\n");
                 }
             }
-            free(quit_response);
+            // free(quit_response);
         }
         if (debug_mode)
         {
@@ -1233,12 +1234,15 @@ bool create_socket_send_helper(std::string serverID, std::string message, std::s
 
     char* welcome_message_buffer;
     read_until_crlf(sockfd, &welcome_message_buffer); // read the welcome message from the target server
-    std::string welcome_message{welcome_message_buffer};
-    std::string expected_welcome_message = "+OK Server ready";
-    // if (welcome_message != expected_welcome_message) {
-    //     std::cerr << "possible network partition" << std::endl; 
-    //     return false; 
-    // }
+    std::string actual_welcome_message{welcome_message_buffer};
+    std::string expected_welcome_message = "+OK Server ready\r\n";
+
+    std::cout << "actual_welcome_message: " << actual_welcome_message << std::endl;
+    
+    if (actual_welcome_message != expected_welcome_message) {
+        std::cerr << "possible network partition" << std::endl; 
+        return false; 
+    }
 
     if (!write_helper(sockfd, message))
     {
