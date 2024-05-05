@@ -41,7 +41,8 @@ std::string valueAdded = "+OK Value added\r\n";
 std::string dataOkay = "+OK Enter value ending with <CRLF>.<CRLF>\r\n";
 std::string secondValueOkay = "+OK Enter second value with DATA\r\n";
 std::string firstValueInvalid = "-ERR Value does not equal current value\r\n";
-std::string shutdownRequestResponse = "+OK shutting down\r\n";
+std::string STDNResponse = "+OK shutting down\r\n";
+std::string RSTTResponse = "+OK recovering\r\n"; 
 
 // Main entry point for this program. See backendserver.h for function documentation.
 // @returns Exit code 0 for success, else error.
@@ -541,7 +542,7 @@ void* workerThread(void* connectionInfo) {
                                     (buf[4] == '\r') &&
                                     (buf[5] == '\n')) {
                                 std::cerr << "STDN received" << std::endl; 
-                                if (write(comm_FD, shutdownRequestResponse.c_str(), shutdownRequestResponse.length()) < 0) {
+                                if (write(comm_FD, STDNResponse.c_str(), STDNResponse.length()) < 0) {
                                     fprintf(stderr, "STDN failed to write: %s\n", strerror(errno));
                                 }
                                 pseudoShutDown = true;
@@ -557,6 +558,19 @@ void* workerThread(void* connectionInfo) {
                                 write(shutDownPipe[1], shutdownSignal, 1);
 
                                 delete shutdownSignal;
+                            } else if ((buf[0] == 'r' || buf[0] == 'R') && 
+                                    (buf[1] == 's' || buf[1] == 'S') && 
+                                    (buf[2] == 't' || buf[2] == 'T') &&
+                                    (buf[3] == 't' || buf[3] == 'T') &&
+                                    (buf[4] == '\r') &&
+                                    (buf[5] == '\n')) {
+                                std::cerr << "RSTT received" << std::endl; 
+                                if (write(comm_FD, RSTTResponse.c_str(), RSTTResponse.length()) < 0) {
+                                    fprintf(stderr, "RSTT failed to write: %s\n", strerror(errno));
+                                }
+                                // TODO: Add code to start recovery process here.
+
+
                             } else if ((strlen(buf) > 8) &&
                                        (buf[0] == 'p' || buf[0] == 'P') &&
                                        (buf[1] == 'u' || buf[1] == 'U') &&
@@ -888,35 +902,6 @@ void* workerThread(void* connectionInfo) {
         continueReading = false;
     }
     
-    // if (serverShutDown == false) {
-    //     if (clientDisconnected == false) {
-    //         // Quit requested. Send farewell message and close this connection.
-    //         write(comm_FD, &quitMessage[0], quitMessage.length());
-
-    //         // Debugger output - farewell message.
-    //         if (vFlag == true) {
-    //             fprintf(stderr, "[%d] S: %s", comm_FD, quitMessage.c_str());
-    //         }
-    //     }
-    //     // Close the connection and update active fileDescriptors.
-    //     close(comm_FD);
-
-    //     // Debugger output - connection closed.
-    //     if (vFlag == true) {
-    //         fprintf(stderr, "[%d] Connection closed\n", comm_FD);
-    //     }
-    // } else {
-    //     // Server shutting down. Write message to client and close connection.
-    //     write(comm_FD, &serverShutDownMessage[0], serverShutDownMessage.length());
-
-    //     // Debugger output - server shutdown enabled and connection closed.
-    //     if (vFlag == true) {
-    //         fprintf(stderr, "[%d] S: %s", comm_FD, serverShutDownMessage.c_str());
-    //         fprintf(stderr, "[%d] Connection closed\n", comm_FD);
-    //     }
-
-    //     close(comm_FD);
-    // }
 
     if (serverShutDown || pseudoShutDown) {
         // Server shutting down. Write message to client and close connection.
