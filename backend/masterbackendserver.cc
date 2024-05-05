@@ -74,7 +74,7 @@ std::map<std::string, bool> server_status_map;
 std::map<int, std::vector<std::string>> tablet_storage_map;
 std::map<int, std::string> group_primary_map;  // this keeps track of the current primary node of each replication group <group_no, primary_serverID>
 std::map<std::string, int> serverID_group_map; // given a serverID, this map tells you which replication group this server is in
-std::unordered_set<std::string> down_servers;
+// std::unordered_set<std::string> down_servers;
 // std::map<int, std::map<int, std::vector<std::string>>> tablet_storage_map;
 std::vector<std::string> config_serverIDs; // server IDs (address + port) read from config file
 int num_servers;                           // number of storage nodes
@@ -98,6 +98,9 @@ void init_server_status_map();
 void start_heartbeat_monitoring();
 int redirect(char first_char);
 void update_server_status_map_and_group_primary_map(std::string server_key);
+std::vector<std::string> get_alive_servers(int group_no);
+std::string get_alive_servers_string(int group_no);
+bool send_PRIM(int group_no); 
 
 int main(int argc, char *argv[])
 {
@@ -426,7 +429,7 @@ void *frontend_thread_func(void *arg)
                     //     std::cout << "broke here?" << std::endl;
                     // }
                     std::string server_ID = tablet_servers_list.front();
-                    while (down_servers.count(server_ID) > 0) // if this server is dead
+                    while (!server_status_map.at(server_ID)) // if this server is dead
                     {
                         tablet_servers_list.erase(tablet_storage_map.at(group_no).begin());
                         tablet_servers_list.push_back(server_ID);
@@ -547,6 +550,9 @@ void *frontend_thread_func(void *arg)
                 response = "+OK node marked as alive\r\n";
                 write_helper(socket_fd, response);
                 verbose_print_helper_server(socket_fd, response);
+                
+                int group_no = serverID_group_map.at(serverID_to_lookup);
+                send_PRIM(group_no); 
             }
             else if (command.substr(0, 4) == "KILL")
             {
@@ -578,6 +584,40 @@ void *frontend_thread_func(void *arg)
                 else
                 {
                     response = "-ERR unable to request storage server shutdown\r\n";
+                    write_helper(socket_fd, response);
+                    verbose_print_helper_server(socket_fd, response);
+                }
+            }
+            else if (command.substr(0, 4) == "RVIV")
+            {
+                std::vector<std::string> command_tokens = split_string(command, ","); // INIT,linhphan -> {INIT, linhphan}
+                if (command_tokens.size() != 2)
+                {
+                    response = "-ERR Incorrect command syntax\r\n";
+                    write_helper(socket_fd, response);
+                    verbose_print_helper_server(socket_fd, response);
+                    continue;
+                }
+                std::string serverID_to_revive = command_tokens.at(1);
+                if (serverID_group_map.count(serverID_to_revive) == 0)
+                {
+                    response = "-ERR Invalid server address\r\n";
+                    write_helper(socket_fd, response);
+                    verbose_print_helper_server(socket_fd, response);
+                    continue;
+                }
+                std::string message_to_send = "RSTT\r\n";
+                std::string expected_response = "+OK recovering\r\n";
+                if (create_socket_send_helper(serverID_to_revive, message_to_send, expected_response))
+                {
+                    response = "+OK recovery requested\r\n";
+                    write_helper(socket_fd, response);
+                    verbose_print_helper_server(socket_fd, response);
+                    update_server_status_map_and_group_primary_map(serverID_to_revive);
+                }
+                else
+                {
+                    response = "-ERR server unable to perform recovery\r\n";
                     write_helper(socket_fd, response);
                     verbose_print_helper_server(socket_fd, response);
                 }
@@ -988,11 +1028,6 @@ void *heartbeat_thread_func(void *arg)
 
         bool is_alive = (bytes_received > 0);
 
-        if (down_servers.count(server_key) > 0)
-        {
-            continue;
-        }
-
         if (!is_alive) // if it's down
         {
             update_server_status_map_and_group_primary_map(server_key);
@@ -1165,8 +1200,8 @@ void init_server_status_map()
     }
 }
 
-/// @brief This function marks the specified server's status as "down" if it's still marked as "alive". If the server's status is already "down", then this function doesn't do anything. This function is thread-safe. 
-/// @param server_key serverID whose status might be updated 
+/// @brief This function marks the specified server's status as "down" if it's still marked as "alive". If the server's status is already "down", then this function doesn't do anything. This function is thread-safe.
+/// @param server_key serverID whose status might be updated
 void update_server_status_map_and_group_primary_map(std::string server_key)
 {
     pthread_mutex_lock(&server_status_map_mutex);
@@ -1197,6 +1232,12 @@ void update_server_status_map_and_group_primary_map(std::string server_key)
         group_primary_map.at(group_no) = candidate_primary;
         std::cout << "new_primary: " << candidate_primary << std::endl;
     }
+
+    if (!send_PRIM(group_no)) {
+        std::cerr << "send_PRIM failed... " << std::endl; 
+    }
+
+    // create_socket_send_helper(group_primary_map.at(group_no), )
     pthread_mutex_unlock(&server_status_map_mutex);
 }
 
@@ -1233,22 +1274,23 @@ bool create_socket_send_helper(std::string serverID, std::string message, std::s
         return false;
     }
 
-    char* welcome_message_buffer;
+    char *welcome_message_buffer;
     read_until_crlf(sockfd, &welcome_message_buffer); // read the welcome message from the target server
     std::string actual_welcome_message{welcome_message_buffer};
     std::string expected_welcome_message = "+OK Server ready\r\n";
 
     std::cout << "actual_welcome_message: " << actual_welcome_message << std::endl;
-    
-    if (actual_welcome_message != expected_welcome_message) {
-        std::cerr << "possible network partition" << std::endl; 
-        return false; 
+
+    if (actual_welcome_message != expected_welcome_message)
+    {
+        std::cerr << "possible network partition" << std::endl;
+        return false;
     }
 
     if (!write_helper(sockfd, message))
     {
-        std::cerr << "unable to write to destination server" << std::endl; 
-        return false; 
+        std::cerr << "unable to write to destination server" << std::endl;
+        return false;
     }
 
     char *buffer;
@@ -1256,10 +1298,59 @@ bool create_socket_send_helper(std::string serverID, std::string message, std::s
     std::string actual_server_response{buffer};
     std::cout << "actual_server_response: " << actual_server_response << std::endl;
     close(sockfd);
-    if (expected_server_response == actual_server_response) {
-        return true; 
-    } else {
-        std::cerr << "server response not expected" << std::endl; 
+    if (expected_server_response == actual_server_response)
+    {
+        return true;
+    }
+    else
+    {
+        std::cerr << "server response not expected" << std::endl;
         return false;
     }
+}
+
+/// @brief Given a replication group number, return a vector of serverIDs of servers currently still alive
+/// @param group_no
+/// @return a vector of serverIDs still alive
+std::vector<std::string> get_alive_servers(int group_no)
+{
+    std::vector<std::string> res;
+    std::vector<std::string> server_list = tablet_storage_map.at(group_no);
+    for (const std::string &serverID : server_list)
+    {
+        if (server_status_map.at(serverID))
+        { // if it's alive
+            res.push_back(serverID);
+        }
+    }
+    return res;
+}
+
+/// @brief Given a replication group number, return a string listing currently alive servers separated by a comma.
+/// @param group_no
+/// @return a string listing currently alive servers separated by a comma. ("serverID1,serverID2,serverID3")
+std::string get_alive_servers_string(int group_no)
+{
+    std::vector<std::string> alive_servers = get_alive_servers(group_no);
+    std::string res;
+    for (const std::string &serverID : alive_servers)
+    {
+        res += serverID + ",";
+    }
+    res = res.substr(0, res.length() - 1);
+    return res;
+}
+
+
+/// @brief Given a group_no, send "PRIM:<list of active nodes>" to the current primary node of that group
+/// @param group_no 
+/// @return true if operation is successful, false otherwise
+bool send_PRIM(int group_no)
+{
+    // get the latest list of active nodes in a group
+    std::string alive_servers_string = get_alive_servers_string(group_no);
+    std::string PRIM_message = "PRIM:" + alive_servers_string + "\r\n";
+    std::string expected_response = "+OK Primary updated\r\n";
+
+    return create_socket_send_helper(group_primary_map.at(group_no), PRIM_message, expected_response);
 }
