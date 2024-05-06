@@ -123,8 +123,8 @@ void send_response(int fd, int thread_no, std::string init_response, std::string
 
 void *heartbeat_thread(void *args)
 {
-  bool sig_int = false; 
-  int comm_fd = *(int*) args;
+  bool sig_int = false;
+  int comm_fd = *(int *)args;
   // first message has to tell the address information for clients to connect to
   std::string addr = "127.0.0.1:" + std::to_string(port) + "\r\n"; // TODO: change to look at debug later
   write(comm_fd, addr.c_str(), strlen(addr.c_str()));
@@ -141,7 +141,7 @@ void *heartbeat_thread(void *args)
 
   while (!sig_int)
   {
-    sleep(3); // sleep for 3 seconds 
+    sleep(3); // sleep for 3 seconds
     char alive_msg[] = "+OK server alive!";
     write(comm_fd, alive_msg, strlen(alive_msg));
   }
@@ -250,54 +250,127 @@ void *connection_thread(void *args)
       }
 
       // Construct and send response
-      if (req_init_line->method == "GET")
+      if (req_init_line->method == "GET" || req_init_line->method == "HEAD")
       {
         if (req_init_line->path == "/")
         {
           std::tuple<std::string, std::string, std::string> response = get_index(req_init_line, headers);
-          send_response(fd, thread_no, std::get<0>(response), std::get<1>(response), std::get<2>(response));
+          if (req_init_line->method == "GET")
+          {
+            send_response(fd, thread_no, std::get<0>(response), std::get<1>(response), std::get<2>(response));
+          }
+          else
+          {
+            send_response(fd, thread_no, std::get<0>(response), std::get<1>(response), "");
+          }
         }
         else if (req_init_line->path == "/signup")
         {
           std::tuple<std::string, std::string, std::string> response = get_signup(req_init_line);
-          send_response(fd, thread_no, std::get<0>(response), std::get<1>(response), std::get<2>(response));
+          if (req_init_line->method == "GET")
+          {
+            send_response(fd, thread_no, std::get<0>(response), std::get<1>(response), std::get<2>(response));
+          }
+          else
+          {
+            send_response(fd, thread_no, std::get<0>(response), std::get<1>(response), "");
+          }
         }
         else if (req_init_line->path == "/home")
         {
           std::tuple<std::string, std::string, std::string> response = get_home(req_init_line, headers);
-          send_response(fd, thread_no, std::get<0>(response), std::get<1>(response), std::get<2>(response));
+          if (req_init_line->method == "GET")
+          {
+            send_response(fd, thread_no, std::get<0>(response), std::get<1>(response), std::get<2>(response));
+          }
+          else
+          {
+            send_response(fd, thread_no, std::get<0>(response), std::get<1>(response), "");
+          }
         }
         else if (req_init_line->path == "/inbox")
         {
           std::tuple<std::string, std::string, std::string> response = get_inbox(req_init_line, headers);
-          send_response(fd, thread_no, std::get<0>(response), std::get<1>(response), std::get<2>(response));
+          if (req_init_line->method == "GET")
+          {
+            send_response(fd, thread_no, std::get<0>(response), std::get<1>(response), std::get<2>(response));
+          }
+          else
+          {
+            send_response(fd, thread_no, std::get<0>(response), std::get<1>(response), "");
+          }
         }
         else if (req_init_line->path.find("/inbox/") != std::string::npos)
         {
           std::tuple<std::string, std::string, std::string> response = get_inbox_message(req_init_line, headers);
-          send_response(fd, thread_no, std::get<0>(response), std::get<1>(response), std::get<2>(response));
+          if (req_init_line->method == "GET")
+          {
+            send_response(fd, thread_no, std::get<0>(response), std::get<1>(response), std::get<2>(response));
+          }
+          else
+          {
+            send_response(fd, thread_no, std::get<0>(response), std::get<1>(response), "");
+          }
         }
         else if (req_init_line->path.find("/storage") != std::string::npos)
         {
           std::tuple<std::string, std::string, std::string> response = get_storage(req_init_line, headers);
-          send_response(fd, thread_no, std::get<0>(response), std::get<1>(response), std::get<2>(response));
+          if (req_init_line->method == "GET")
+          {
+            send_response(fd, thread_no, std::get<0>(response), std::get<1>(response), std::get<2>(response));
+          }
+          else
+          {
+            send_response(fd, thread_no, std::get<0>(response), std::get<1>(response), "");
+          }
         }
         else if (req_init_line->path.find("/file/") != std::string::npos)
         {
           std::tuple<std::string, std::string, std::string> response = get_file(req_init_line, headers);
-          send_response(fd, thread_no, std::get<0>(response), std::get<1>(response), std::get<2>(response));
-        } else if (req_init_line->path.find("/download") != std::string::npos)
+          if (req_init_line->method == "GET")
+          {
+            send_response(fd, thread_no, std::get<0>(response), std::get<1>(response), std::get<2>(response));
+          }
+          else
+          {
+            send_response(fd, thread_no, std::get<0>(response), std::get<1>(response), "");
+          }
+        }
+        else if (req_init_line->path.find("/download") != std::string::npos)
         {
           std::tuple<std::string, std::string, std::string> response = download_file(req_init_line, headers);
-          send_response(fd, thread_no, std::get<0>(response), std::get<1>(response), std::get<2>(response));
-        } else if (req_init_line->path.find("/changepassword") != std::string::npos)
+          if (req_init_line->method == "GET")
+          {
+            send_response(fd, thread_no, std::get<0>(response), std::get<1>(response), std::get<2>(response));
+          }
+          else
+          {
+            send_response(fd, thread_no, std::get<0>(response), std::get<1>(response), "");
+          }
+        }
+        else if (req_init_line->path.find("/changepassword") != std::string::npos)
         {
           std::tuple<std::string, std::string, std::string> response = get_change_password(req_init_line, headers);
-          send_response(fd, thread_no, std::get<0>(response), std::get<1>(response), std::get<2>(response));
-        } else if (req_init_line->path.find("/admin") != std::string::npos)
+          if (req_init_line->method == "GET")
+          {
+            send_response(fd, thread_no, std::get<0>(response), std::get<1>(response), std::get<2>(response));
+          }
+          else
+          {
+            send_response(fd, thread_no, std::get<0>(response), std::get<1>(response), "");
+          }
+        }
+        else if (req_init_line->path.find("/admin") != std::string::npos)
         {
           std::tuple<std::string, std::string, std::string> response = get_admin(req_init_line, headers);
-          send_response(fd, thread_no, std::get<0>(response), std::get<1>(response), std::get<2>(response));
+          if (req_init_line->method == "GET")
+          {
+            send_response(fd, thread_no, std::get<0>(response), std::get<1>(response), std::get<2>(response));
+          }
+          else
+          {
+            send_response(fd, thread_no, std::get<0>(response), std::get<1>(response), "");
+          }
         }
         else
         {
@@ -364,15 +437,6 @@ void *connection_thread(void *args)
           headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
           send_response(fd, thread_no, init_response_line, headers, message_body);
         }
-      }
-      else if (req_init_line->method == "HEAD")
-      {
-        std::string message_body = "501 Not Implemented";
-        std::string init_response_line = req_init_line->version + " 501 Not Implemented\r\n";
-        std::string headers = "";
-        headers += "Content-Type: text/plain\r\n";
-        headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
-        send_response(fd, thread_no, init_response_line, headers, message_body);
       }
       else
       {
@@ -454,7 +518,7 @@ int main(int argc, char *argv[])
     siginthandler(-1);
     exit(EXIT_FAILURE);
   }
-  
+
   // Connect to load balancer
   struct sockaddr_in lbservaddr;
   bzero(&lbservaddr, sizeof(lbservaddr));
@@ -462,12 +526,14 @@ int main(int argc, char *argv[])
   lbservaddr.sin_port = htons(5000);
   std::string lbip = "127.0.0.1"; // TODO: Change to config file later
   inet_pton(AF_INET, lbip.c_str(), &(lbservaddr.sin_addr));
-  connect(lbfd, (struct sockaddr*)&lbservaddr, sizeof(lbservaddr));
+  connect(lbfd, (struct sockaddr *)&lbservaddr, sizeof(lbservaddr));
 
   // create heartbeat thread
-  if (!shutting_down) {
+  if (!shutting_down)
+  {
     pthread_t hb_thread_info;
-    if (pthread_create(&hb_thread_info, NULL, heartbeat_thread, &lbfd) < 0) {
+    if (pthread_create(&hb_thread_info, NULL, heartbeat_thread, &lbfd) < 0)
+    {
       std::cerr << "Error in creating thread" << std::endl;
       siginthandler(-1);
       exit(EXIT_FAILURE);

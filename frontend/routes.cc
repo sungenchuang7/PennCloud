@@ -336,7 +336,7 @@ std::vector<std::tuple<std::string, std::string, std::string>> get_frontend_serv
   while ((pos = command.find(delimiter)) != std::string::npos)
   {
     token = command.substr(0, pos);
-    std::cerr << "token: " << token << std::endl;
+    // std::cerr << "token: " << token << std::endl;
     std::string address = token.substr(0, token.find(","));
     token.erase(0, token.find(",") + 1);
     std::string status = token.substr(0, token.find(","));
