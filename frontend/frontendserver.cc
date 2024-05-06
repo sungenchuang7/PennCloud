@@ -345,6 +345,16 @@ void *connection_thread(void *args)
           std::tuple<std::string, std::string, std::string> response = post_change_password(req_init_line, headers, message_body_buf);
           send_response(fd, thread_no, std::get<0>(response), std::get<1>(response), std::get<2>(response));
         }
+        else if (req_init_line->path.find("/kill-server") != std::string::npos)
+        {
+          std::tuple<std::string, std::string, std::string> response = post_kill_server(req_init_line, headers, message_body_buf);
+          send_response(fd, thread_no, std::get<0>(response), std::get<1>(response), std::get<2>(response));
+        }
+        else if (req_init_line->path.find("/restart-server") != std::string::npos)
+        {
+          std::tuple<std::string, std::string, std::string> response = post_restart_server(req_init_line, headers, message_body_buf);
+          send_response(fd, thread_no, std::get<0>(response), std::get<1>(response), std::get<2>(response));
+        }
         else
         {
           std::string message_body = "404 Not Found";

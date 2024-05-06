@@ -113,9 +113,7 @@
                 })
                     .then(response => {
                         if (!response.ok) {
-                            document.getElementById('modal').innerText = response.text() + "\nClick to go back to inbox.";
-                            document.getElementById("modal").style.display = "block";
-                            throw new Error('Response was not ok');
+                            throw new Error('Reply failed.');
                         }
                         return response.text();
                     })
@@ -124,6 +122,8 @@
                         document.getElementById("modal").style.display = "block";
                     })
                     .catch(error => {
+                        document.getElementById('modal').innerText = error + "\nClick to go back to inbox.";
+                        document.getElementById("modal").style.display = "block";
                         console.error('There was a problem with POST /send in replying function', error);
                     });
             });
@@ -138,9 +138,7 @@
                 })
                     .then(response => {
                         if (!response.ok) {
-                            document.getElementById('modal').innerText = response.text() + "\nClick to go back to inbox.";
-                            document.getElementById("modal").style.display = "block";
-                            throw new Error('Response was not ok');
+                            throw new Error('Forwarding failed.');
                         }
                         return response.text();
                     })
@@ -149,6 +147,8 @@
                         document.getElementById("modal").style.display = "block";
                     })
                     .catch(error => {
+                        document.getElementById('modal').innerText = error + "\nClick to go to inbox.";
+                        document.getElementById("modal").style.display = "block";
                         console.error('There was a problem with POST /send in forwarding function', error);
                     });
             });

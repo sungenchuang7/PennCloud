@@ -37,7 +37,8 @@ std::tuple<std::string, std::string, std::string> post_reply_message(ReqInitLine
 std::tuple<std::string, std::string, std::string> post_forward_message(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body);
 std::tuple<std::string, std::string, std::string> post_signup(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body);
 std::tuple<std::string, std::string, std::string> post_change_password(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body);
-
+std::tuple<std::string, std::string, std::string> post_kill_server(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body);
+std::tuple<std::string, std::string, std::string> post_restart_server(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body);
 
 // inbox stuff 
 // GET ROUTES

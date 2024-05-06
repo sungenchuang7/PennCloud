@@ -1666,6 +1666,154 @@ std::tuple<std::string, std::string, std::string> post_change_password(ReqInitLi
   headers += "Content-Length: 0\r\n";
   return std::make_tuple(init_response, headers, message_body);
 }
+
+std::tuple<std::string, std::string, std::string> post_kill_server(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body)
+{
+  // Parse body for server address
+  std::unordered_map<std::string, std::string> body_map = parse_post_body_url_encoded(body);
+  std::string server_address = body_map["server_id"];
+  std::cerr << "Server Address: " << server_address << std::endl;
+
+  // Connect to master server
+  int sock = socket(PF_INET, SOCK_STREAM, 0);
+  struct sockaddr_in servaddr;
+  bzero(&servaddr, sizeof(servaddr));
+  servaddr.sin_family = AF_INET;
+  inet_pton(AF_INET, MASTER_SERVER_ADDR.c_str(), &servaddr.sin_addr);
+  servaddr.sin_port = htons(MASTER_SERVER_PORT);
+
+  // Connect to server
+  if (connect(sock, (struct sockaddr *)&servaddr, sizeof(servaddr)) < 0)
+  {
+    // Send error back to frontend
+    std::string init_response = req_init_line->version + " 500 Internal Server Error\r\n";
+    std::string message_body = "Cannot connect to master backend";
+    std::string headers = "";
+    headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
+    close(sock);
+    return std::make_tuple(init_response, headers, message_body);
+  }
+
+  // Read for +OK Sever ready
+  char ready_response[MAX_BUFF_SIZE];
+  bzero(ready_response, MAX_BUFF_SIZE);
+  int bytes_read = read(sock, ready_response, MAX_BUFF_SIZE);
+  ready_response[bytes_read] = '\0';
+  std::cerr << "Ready Response: " << ready_response << std::endl;
+  if (std::string(ready_response).find("+OK") == std::string::npos)
+  {
+    // Send error back to frontend
+    std::string init_response = req_init_line->version + " 500 Internal Server Error\r\n";
+    std::string message_body = "Master server not ready";
+    std::string headers = "";
+    headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
+    close(sock);
+    return std::make_tuple(init_response, headers, message_body);
+  }
+
+  // Send kill to master server
+  std::string kill_msg = "KILL," + server_address + "\r\n";
+  send(sock, kill_msg.c_str(), kill_msg.length(), 0);
+
+  // Receive response from master server
+  char response[MAX_BUFF_SIZE];
+  bzero(response, MAX_BUFF_SIZE);
+  bytes_read = read(sock, response, MAX_BUFF_SIZE);
+  response[bytes_read] = '\0';
+  std::string response_str = response;
+  std::cerr << "Response: " << response_str << std::endl;
+  close(sock);
+  if (response_str.find("+OK") == std::string::npos)
+  {
+    // Send error back to frontend
+    std::string init_response = req_init_line->version + " 500 Internal Server Error\r\n";
+    std::string message_body = "Error: Could not kill server";
+    std::string headers = "";
+    headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
+    return std::make_tuple(init_response, headers, message_body);
+  }
+
+  std::string init_response = req_init_line->version + " 200 OK\r\n";
+  std::string message_body = response_str;
+  std::string headers = "";
+  headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
+  return std::make_tuple(init_response, headers, message_body);
+}
+
+std::tuple<std::string, std::string, std::string> post_restart_server(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body)
+{
+  // Parse body for server address
+  std::unordered_map<std::string, std::string> body_map = parse_post_body_url_encoded(body);
+  std::string server_address = body_map["server_id"];
+  std::cerr << "Server Address: " << server_address << std::endl;
+
+  // Connect to master server
+  int sock = socket(PF_INET, SOCK_STREAM, 0);
+  struct sockaddr_in servaddr;
+  bzero(&servaddr, sizeof(servaddr));
+  servaddr.sin_family = AF_INET;
+  inet_pton(AF_INET, MASTER_SERVER_ADDR.c_str(), &servaddr.sin_addr);
+  servaddr.sin_port = htons(MASTER_SERVER_PORT);
+
+  // Connect to server
+  if (connect(sock, (struct sockaddr *)&servaddr, sizeof(servaddr)) < 0)
+  {
+    // Send error back to frontend
+    std::string init_response = req_init_line->version + " 500 Internal Server Error\r\n";
+    std::string message_body = "Cannot connect to master backend";
+    std::string headers = "";
+    headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
+    close(sock);
+    return std::make_tuple(init_response, headers, message_body);
+  }
+
+  // Read for +OK Sever ready
+  char ready_response[MAX_BUFF_SIZE];
+  bzero(ready_response, MAX_BUFF_SIZE);
+  int bytes_read = read(sock, ready_response, MAX_BUFF_SIZE);
+  ready_response[bytes_read] = '\0';
+  std::cerr << "Ready Response: " << ready_response << std::endl;
+  if (std::string(ready_response).find("+OK") == std::string::npos)
+  {
+    // Send error back to frontend
+    std::string init_response = req_init_line->version + " 500 Internal Server Error\r\n";
+    std::string message_body = "Master server not ready";
+    std::string headers = "";
+    headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
+    close(sock);
+    return std::make_tuple(init_response, headers, message_body);
+  }
+
+  // Send kill to master server
+  std::string kill_msg = "RVIV," + server_address + "\r\n";
+  send(sock, kill_msg.c_str(), kill_msg.length(), 0);
+
+  // Receive response from master server
+  char response[MAX_BUFF_SIZE];
+  bzero(response, MAX_BUFF_SIZE);
+  bytes_read = read(sock, response, MAX_BUFF_SIZE);
+  response[bytes_read] = '\0';
+  std::string response_str = response;
+  std::cerr << "Response: " << response_str << std::endl;
+  close(sock);
+  if (response_str.find("+OK") == std::string::npos)
+  {
+    // Send error back to frontend
+    std::string init_response = req_init_line->version + " 500 Internal Server Error\r\n";
+    std::string message_body = "Error: Could not restart server";
+    std::string headers = "";
+    headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
+    close(sock);
+    return std::make_tuple(init_response, headers, message_body);
+  }
+  std::string init_response = req_init_line->version + " 200 OK\r\n";
+  std::string message_body = response_str;
+  std::string headers = "";
+  headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
+  close(sock);
+  return std::make_tuple(init_response, headers, message_body);
+}
+
 // File system functions
 // Get
 std::tuple<std::string, std::string, std::string> get_storage(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers)

@@ -5,10 +5,39 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Penn Cloud</title>
+    <style>
+        .modal {
+            display: none;
+            position: fixed;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            width: 300px;
+            padding: 20px;
+            background-color: #fefefe;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+        }
+
+        .modal-content {
+            background-color: #fefefe;
+            margin: auto;
+            padding: 20px;
+            border: 1px solid #888;
+            width: 80%;
+        }
+    </style>
 </head>
 
 <body>
     <div class="container">
+        <!-- Modal -->
+        <div id="modal" class="modal">
+            <div class="modal-content">
+                <p>Modal text</p>
+                <button id="closeModalBtn">Close</button>
+            </div>
+
+        </div>
         <h1>Admin Console</h1>
 
         <h2>Servers</h2>
@@ -60,14 +89,15 @@
         //     { server_address: "127.0.0.1:8082", status: "Alive", num_connections: 3},
         // ];
         function displayServers() {
+            // Write in server information
             const backendTable = document.getElementById('backendTable');
             backend_servers.forEach(server => {
                 const row = document.createElement('tr');
                 row.innerHTML = `
                 <td>${server.server_address}</td>
                 <td>${server.status}</td>
-                <td><button>Kill</button></td>
-                <td><button>Restart</button></td>
+                <td><button class="kill-button">Kill</button></td>
+                <td><button class="restart-button">Restart</button></td>
             `;
                 backendTable.appendChild(row);
             });
@@ -82,6 +112,82 @@
             `;
                 frontendTable.appendChild(row);
             });
+
+            // Add event listeners to buttons
+            const killButtons = document.getElementsByClassName('kill-button');
+            for (let i = 0; i < killButtons.length; i++) {
+                killButtons[i].addEventListener('click', () => {
+                    const server_id = event.target.parentNode.parentNode.querySelector('td:first-child').textContent;
+                    console.log('Killing server' + server_id);
+                    const bodyData = "server_id=" + server_id + "&";
+                    const options = {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'text/plain'
+                        },
+                        body: bodyData
+                    };
+
+                    fetch('/kill-server', options)
+                        .then(response => {
+                            if (!response.ok) {
+                                throw new Error('Master backend was unable to kill server.');
+                            }
+                            return response;
+                        })
+                        .then(data => {
+                            console.log('POST request successful', data);
+                            document.getElementById('modal').innerText = "Kill successful!\nClick to close.";
+                            document.getElementById("modal").style.display = "block";
+                        })
+                        .catch(error => {
+                            console.error('There was a problem with the POST request:', error);
+                            alert('Error in killing server. Please try again.');
+                        });
+
+                });
+            }
+
+            const restartButtons = document.getElementsByClassName('restart-button');
+            for (let i = 0; i < restartButtons.length; i++) {
+                restartButtons[i].addEventListener('click', () => {
+                    const server_id = event.target.parentNode.parentNode.querySelector('td:first-child').textContent;
+                    console.log('Restarting server' + server_id);
+                    const bodyData = "server_id=" + server_id + "&";
+                    const options = {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'text/plain'
+                        },
+                        body: bodyData
+                    };
+
+                    fetch('/restart-server', options)
+                        .then(response => {
+                            if (!response.ok) {
+                                throw new Error('Master backend was unable to restart server.');
+                            }
+                            return response;
+                        })
+                        .then(data => {
+                            console.log('POST request successful', data);
+                            document.getElementById('modal').innerText = "Restart successful!\nClick to close.";
+                            document.getElementById("modal").style.display = "block";
+                        })
+                        .catch(error => {
+                            console.error('There was a problem with the POST request:', error);
+                            alert('Error in restarting server. Please try again.');
+                        });
+
+                });
+            }
+
+            var modal = document.getElementById("modal");
+            window.onclick = function (event) {
+                if (event.target == modal) {
+                    window.location.href = "/admin";
+                }
+            }
         }
 
         window.onload = displayServers;
