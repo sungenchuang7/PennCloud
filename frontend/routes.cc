@@ -925,7 +925,7 @@ std::tuple<std::string, std::string, std::string> get_inbox(ReqInitLine *req_ini
   std::cerr << "Username: " << username << std::endl;
 
   // Ping backend master for backend server address
-  std::string backend_address_port = get_backend_address("user_" + username);
+  std::string backend_address_port = get_backend_address("email_" + username);
   std::string backend_address = backend_address_port.substr(0, backend_address_port.find(":"));
   int backend_port = std::stoi(backend_address_port.substr(backend_address_port.find(":") + 1));
 
@@ -942,7 +942,7 @@ std::tuple<std::string, std::string, std::string> get_inbox(ReqInitLine *req_ini
     if (message_id != "Metadata")
     {
       // Ping backend master for backend server address
-      std::string backend_address_port = get_backend_address("user_" + username);
+      std::string backend_address_port = get_backend_address("email_" + username);
       std::string backend_address = backend_address_port.substr(0, backend_address_port.find(":"));
       int backend_port = std::stoi(backend_address_port.substr(backend_address_port.find(":") + 1));
       std::cerr << "Message ID: " << message_id << std::endl;
@@ -1072,7 +1072,7 @@ std::tuple<std::string, std::string, std::string> get_inbox_message(ReqInitLine 
   std::string username = usernames[sid];
   std::cerr << "Username: " << username << std::endl;
   // Ping backend master for backend server address
-  std::string backend_address_port = get_backend_address("user_" + username);
+  std::string backend_address_port = get_backend_address("email_" + username);
   std::string backend_address = backend_address_port.substr(0, backend_address_port.find(":"));
   int backend_port = std::stoi(backend_address_port.substr(backend_address_port.find(":") + 1));
   std::string message = get_kvs(backend_address, backend_port, "email_" + username, message_id + ".txt");
@@ -1428,10 +1428,10 @@ std::tuple<std::string, std::string, std::string> post_send_message(ReqInitLine 
     if (recipient.find("@penncloud") != std::string::npos)
     {
       // Ping backend master for backend server address
-      std::string backend_address_port = get_backend_address("user_" + username);
+      std::string recipient_remove_domain = recipient.substr(0, recipient.find("@"));
+      std::string backend_address_port = get_backend_address("email_" + recipient_remove_domain);
       std::string backend_address = backend_address_port.substr(0, backend_address_port.find(":"));
       int backend_port = std::stoi(backend_address_port.substr(backend_address_port.find(":") + 1));
-      std::string recipient_remove_domain = recipient.substr(0, recipient.find("@"));
       // Check if user exists
       std::string user_exists = get_kvs(backend_address, backend_port, "email_" + recipient_remove_domain, "metadata.txt");
       if (user_exists.length()  <= 5 || user_exists.length() > 5 && user_exists.substr(0, 5) != "--ERR")
@@ -1442,7 +1442,7 @@ std::tuple<std::string, std::string, std::string> post_send_message(ReqInitLine 
         std::string put_metadata_response;
         while (put_metadata_response != "+OK Value added")
         {
-          backend_address_port = get_backend_address("user_" + username);
+          backend_address_port = get_backend_address("email_" + recipient_remove_domain);
           backend_address = backend_address_port.substr(0, backend_address_port.find(":"));
           backend_port = std::stoi(backend_address_port.substr(backend_address_port.find(":") + 1));
           // std::cerr << "Recipient: " << recipient_remove_domain << std::endl;
@@ -1511,7 +1511,7 @@ std::tuple<std::string, std::string, std::string> post_send_message(ReqInitLine 
         ip_addr = inet_ntoa(*(struct in_addr *)mx_host->h_addr_list[0]);
       }
       
-      std::cerr << "ip_addr: " << ip_addr << std::endl;
+      // std::cerr << "ip_addr: " << ip_addr << std::endl;
       
       // Send info to smtp client
       std::string smtp_client_msg = ip_addr + ":25\n"; // Remote server address
@@ -1581,7 +1581,7 @@ std::tuple<std::string, std::string, std::string> post_delete_message(ReqInitLin
   while (put_metadata_response != "+OK Value added")
   {
     // Ping backend master for backend server address
-    std::string backend_address_port = get_backend_address("user_" + username);
+    std::string backend_address_port = get_backend_address("email_" + username);
     std::string backend_address = backend_address_port.substr(0, backend_address_port.find(":"));
     int backend_port = std::stoi(backend_address_port.substr(backend_address_port.find(":") + 1));
 
@@ -1596,7 +1596,7 @@ std::tuple<std::string, std::string, std::string> post_delete_message(ReqInitLin
   }
 
   // Ping backend master for backend server address
-  std::string backend_address_port = get_backend_address("user_" + username);
+  std::string backend_address_port = get_backend_address("email_" + username);
   std::string backend_address = backend_address_port.substr(0, backend_address_port.find(":"));
   int backend_port = std::stoi(backend_address_port.substr(backend_address_port.find(":") + 1));
 

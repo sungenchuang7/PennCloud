@@ -483,7 +483,7 @@ void *workerThread(void *connectionInfo)
                         std::string recipient_remove_domain = mailToAddresses[i].substr(0, mailToAddresses[i].find("@"));
 
                         // Ping backend master for backend server address
-                        std::string backend_address_port = get_backend_address("user_" + recipient_remove_domain);
+                        std::string backend_address_port = get_backend_address("email_" + recipient_remove_domain);
                         std::cerr << "Backend address port: " << backend_address_port << std::endl;
                         std::string backend_address = backend_address_port.substr(0, backend_address_port.find(":"));
                         int backend_port = std::stoi(backend_address_port.substr(backend_address_port.find(":") + 1));
@@ -499,7 +499,7 @@ void *workerThread(void *connectionInfo)
                             std::string put_metadata_response;
                             while (put_metadata_response != "+OK Value added")
                             {
-                                backend_address_port = get_backend_address("user_" + recipient_remove_domain);
+                                backend_address_port = get_backend_address("email_" + recipient_remove_domain);
                                 backend_address = backend_address_port.substr(0, backend_address_port.find(":"));
                                 backend_port = std::stoi(backend_address_port.substr(backend_address_port.find(":") + 1));
                                 // std::cerr << "Recipient: " << recipient_remove_domain << std::endl;
