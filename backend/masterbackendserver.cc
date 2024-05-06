@@ -96,11 +96,11 @@ void init_tablet_storage_map();
 void init_group_primary_map();
 void init_server_status_map();
 void start_heartbeat_monitoring();
-int redirect(char first_char);
+int get_group_no_from_char(char first_char);
 void update_server_status_map_and_group_primary_map(std::string server_key);
 std::vector<std::string> get_alive_servers(int group_no);
 std::string get_alive_servers_string(int group_no);
-bool send_PRIM(int group_no); 
+bool send_PRIM(int group_no);
 
 int main(int argc, char *argv[])
 {
@@ -371,11 +371,6 @@ void *frontend_thread_func(void *arg)
 
             if (command.substr(0, 4) == "INIT")
             {
-                if (debug_mode)
-                {
-                    std::cout << "MASTER received command: " << command << std::endl;
-                }
-
                 std::vector<std::string> command_tokens = split_string(command, ","); // INIT,linhphan -> {INIT, linhphan}
                 if (command_tokens.size() != 2)
                 {
@@ -383,76 +378,62 @@ void *frontend_thread_func(void *arg)
                     write_helper(socket_fd, response);
                     continue;
                 }
-
-                if (debug_mode)
-                {
-                    std::cout << "command_tokens.size(): " << command_tokens.size() << std::endl;
-                }
-
                 std::string row_key = command_tokens[1];
-
-                if (debug_mode)
-                {
-                    std::cout << "row_key: " << row_key << std::endl;
-                }
-
                 char first_char = row_key.at(0);
 
-                // int tablet_no = redirect(first_char);
-                int group_no = redirect(first_char);
+                int group_no = get_group_no_from_char(first_char);
 
-                // if (debug_mode)
-                // {
-                //     std::cout << "tablet_no: " << tablet_no << std::endl;
-                // }
-
-                // if (tablet_no == -1)
-                // {
-                //     response = "-ERR invalid row key\r\n";
-                // }
                 if (group_no == -1)
                 {
                     response = "-ERR invalid row key\r\n";
                 }
                 else
                 {
+                    std::cerr << "did we reach1" << std::endl;
+                    std::cerr << "group_no: " << group_no << std::endl;
                     // pthread_mutex_lock(&server_status_map_mutex);
-                    // create a reference to a vector holding servers' indices storing the given tablet
-                    if (debug_mode)
+                    if (group_primary_map.at(group_no) == "all_dead")
                     {
-                        std::cout << "count: " << tablet_storage_map.count(2) << std::endl;
+                        std::cerr << "did we reach2" << std::endl;
+                        response = "-ERR all servers are down at the moment\r\n";
                     }
-                    // auto &tablet_servers_list = tablet_storage_map.at(tablet_no);
-                    auto &tablet_servers_list = tablet_storage_map.at(group_no);
-                    // if (debug_mode)
-                    // {
-                    //     std::cout << "broke here?" << std::endl;
-                    // }
-                    std::string server_ID = tablet_servers_list.front();
-                    while (!server_status_map.at(server_ID)) // if this server is dead
+                    else
                     {
+                        std::cerr << "did we reach3" << std::endl;
+                        std::cerr << "group_primary_map.at(group_no): " << group_primary_map.at(group_no) << std::endl;
+                        // auto &tablet_servers_list = tablet_storage_map.at(tablet_no);
+                        auto &tablet_servers_list = tablet_storage_map.at(group_no);
+                        // if (debug_mode)
+                        // {
+                        //     std::cout << "broke here?" << std::endl;
+                        // }
+                        std::string server_ID = tablet_servers_list.front();
+                        while (!server_status_map.at(server_ID)) // if this server is dead
+                        {
+                            tablet_servers_list.erase(tablet_storage_map.at(group_no).begin());
+                            tablet_servers_list.push_back(server_ID);
+                            server_ID = tablet_servers_list.front();
+                        }
+                        // while (!server_status_map.at(server_ID)) // if this server is dead
+                        // {
+                        //     tablet_servers_list.erase(tablet_storage_map.at(group_no).begin());
+                        //     tablet_servers_list.push_back(server_ID);
+                        //     server_ID = tablet_servers_list.front();
+                        // }
+                        response = "RDIR," + server_ID + "\r\n";
+                        // update front of vector
                         tablet_servers_list.erase(tablet_storage_map.at(group_no).begin());
                         tablet_servers_list.push_back(server_ID);
-                        server_ID = tablet_servers_list.front();
                     }
-                    // while (!server_status_map.at(server_ID)) // if this server is dead
-                    // {
-                    //     tablet_servers_list.erase(tablet_storage_map.at(group_no).begin());
-                    //     tablet_servers_list.push_back(server_ID);
-                    //     server_ID = tablet_servers_list.front();
-                    // }
-                    response = "RDIR," + server_ID + "\r\n";
-                    // update front of vector
-                    tablet_servers_list.erase(tablet_storage_map.at(group_no).begin());
-                    tablet_servers_list.push_back(server_ID);
                 }
+                // pthread_mutex_unlock(&server_status_map_mutex);
                 write_helper(socket_fd, response);
                 verbose_print_helper_server(socket_fd, response);
             }
             else if (command == "STAT")
             {
                 response += "+OK,";
-                pthread_mutex_lock(&server_status_map_mutex);
+                // pthread_mutex_lock(&server_status_map_mutex);
                 for (const auto &pair : server_status_map)
                 {
                     auto temp = split_string(pair.first, ":");
@@ -464,7 +445,7 @@ void *frontend_thread_func(void *arg)
                 response += "\r\n";
                 write_helper(socket_fd, response);
                 verbose_print_helper_server(socket_fd, response);
-                pthread_mutex_unlock(&server_status_map_mutex);
+                // pthread_mutex_unlock(&server_status_map_mutex);
             }
             else if (command.substr(0, 4) == "GTPM")
             {
@@ -546,13 +527,16 @@ void *frontend_thread_func(void *arg)
                 // down_servers.erase(command_tokens.at(1));
                 pthread_mutex_lock(&server_status_map_mutex);
                 server_status_map.at(command_tokens.at(1)) = true;
+                int group_no = serverID_group_map.at(serverID_to_lookup);
+                if (group_primary_map.at(group_no) == "all_dead")
+                { // if all other nodes in the group are dead, the revived node becomes the primary
+                    group_primary_map.at(group_no) = serverID_to_lookup;
+                }
                 pthread_mutex_unlock(&server_status_map_mutex);
                 response = "+OK node marked as alive\r\n";
                 write_helper(socket_fd, response);
                 verbose_print_helper_server(socket_fd, response);
-                
-                int group_no = serverID_group_map.at(serverID_to_lookup);
-                send_PRIM(group_no); 
+                send_PRIM(group_no);
             }
             else if (command.substr(0, 4) == "KILL")
             {
@@ -937,7 +921,10 @@ void parse_args(int argc, char *argv[])
     }
 }
 
-int redirect(char first_char)
+/// @brief This function parses the first char of a row-key to determine which replication group the row belongs to
+/// @param first_char
+/// @return replication group number, or -1 if the input char isn't valid
+int get_group_no_from_char(char first_char)
 {
     if ((first_char >= 'A' && first_char <= 'I') || (first_char >= 'a' && first_char <= 'i'))
     {
@@ -1214,13 +1201,14 @@ void update_server_status_map_and_group_primary_map(std::string server_key)
     std::cout << server_key << " is down!" << std::endl;
     server_status_map.at(server_key) = false;         // update the status of the server to be dead
     int group_no = serverID_group_map.at(server_key); // get the replication group number of the server
+    int iteration_counter = 0;
     if (group_primary_map.at(group_no) == server_key) // if the detected down node is the primary of the group
     {
         std::cout << server_key << " is actually the primary!" << std::endl;
         // pick the front node in the group server list as potential new primary
         std::string candidate_primary = tablet_storage_map.at(group_no).front();
         // while this node is also down
-        while (!server_status_map.at(candidate_primary))
+        while (!server_status_map.at(candidate_primary)) // set a time out here using iteration counter
         {
             // pop the front node from the list
             tablet_storage_map.at(group_no).erase(tablet_storage_map.at(group_no).begin());
@@ -1228,13 +1216,22 @@ void update_server_status_map_and_group_primary_map(std::string server_key)
             tablet_storage_map.at(group_no).push_back(candidate_primary);
             // pick the new front node as potential new primary
             candidate_primary = tablet_storage_map.at(group_no).front();
+            iteration_counter++;
+            if (iteration_counter >= 3)
+            {
+                group_primary_map.at(group_no) = "all_dead";
+                pthread_mutex_unlock(&server_status_map_mutex);
+                std::cerr << "SET ALL DEAD" << std::endl;
+                return; // if no servers in the group are alive, don't send PRIM
+            }
         }
         group_primary_map.at(group_no) = candidate_primary;
         std::cout << "new_primary: " << candidate_primary << std::endl;
     }
 
-    if (!send_PRIM(group_no)) {
-        std::cerr << "send_PRIM failed... " << std::endl; 
+    if (!send_PRIM(group_no))
+    {
+        std::cerr << "send_PRIM failed... " << std::endl;
     }
 
     // create_socket_send_helper(group_primary_map.at(group_no), )
@@ -1341,9 +1338,8 @@ std::string get_alive_servers_string(int group_no)
     return res;
 }
 
-
 /// @brief Given a group_no, send "PRIM:<list of active nodes>" to the current primary node of that group
-/// @param group_no 
+/// @param group_no
 /// @return true if operation is successful, false otherwise
 bool send_PRIM(int group_no)
 {
