@@ -168,18 +168,6 @@ int main(int argc, char *argv[])
 
     start_heartbeat_monitoring();
 
-    // heartbeat_arg_ptrs.resize(num_servers);
-    // heartbeat_threads.resize(num_servers);
-    // for (int i = 0; i < num_servers; i++) // create a thread for each storage node for monitoring
-    // {
-    //     std::vector<std::string> temp = split_string(config_serverIDs.at(i), ":"); // split "127.0.0.1:5000" for example
-    //     std::string server_address = temp[0];
-    //     int server_port = std::stoi(temp[1]);
-    //     heartbeat_arg *arg_ptr = new heartbeat_arg(server_address, server_port);
-    //     heartbeat_arg_ptrs.push_back(arg_ptr);
-    //     pthread_create(&heartbeat_threads.at(i), NULL, heartbeat_thread_func, arg_ptr);
-    // }
-
     // Initialize socket for listening for connections with from frontend
     listen_fd = socket(AF_INET, SOCK_STREAM, 0);
 
@@ -1171,6 +1159,7 @@ void INIT_handler(std::string command, int socket_fd)
     {
         response = "-ERR Incorrect command syntax\r\n";
         write_helper(socket_fd, response);
+        verbose_print_helper_server(socket_fd, response);
         return;
     }
     std::string row_key = command_tokens[1];
@@ -1196,12 +1185,8 @@ void INIT_handler(std::string command, int socket_fd)
         {
             std::cerr << "did we reach3" << std::endl;
             std::cerr << "group_primary_map.at(group_no): " << group_primary_map.at(group_no) << std::endl;
-            // auto &tablet_servers_list = tablet_storage_map.at(tablet_no);
-            auto &tablet_servers_list = tablet_storage_map.at(group_no);
-            // if (debug_mode)
-            // {
-            //     std::cout << "broke here?" << std::endl;
-            // }
+            
+            std::vector<std::string> &tablet_servers_list = tablet_storage_map.at(group_no);
             std::string server_ID = tablet_servers_list.front();
             while (!server_status_map.at(server_ID)) // if this server is dead
             {
@@ -1209,12 +1194,6 @@ void INIT_handler(std::string command, int socket_fd)
                 tablet_servers_list.push_back(server_ID);
                 server_ID = tablet_servers_list.front();
             }
-            // while (!server_status_map.at(server_ID)) // if this server is dead
-            // {
-            //     tablet_servers_list.erase(tablet_storage_map.at(group_no).begin());
-            //     tablet_servers_list.push_back(server_ID);
-            //     server_ID = tablet_servers_list.front();
-            // }
             response = "RDIR," + server_ID + "\r\n";
             // update front of vector
             tablet_servers_list.erase(tablet_storage_map.at(group_no).begin());
