@@ -1010,10 +1010,19 @@ void *heartbeat_thread_func(void *arg)
         tv.tv_usec = 0;
         setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof tv);
 
-        char buffer[DEFAULT_READ_BUFFER_SIZE] = {0};
-        int bytes_received = recv(sockfd, buffer, DEFAULT_READ_BUFFER_SIZE, 0);
+        // char buffer[DEFAULT_READ_BUFFER_SIZE] = {0};
+        // int bytes_received = recv(sockfd, buffer, DEFAULT_READ_BUFFER_SIZE, 0);
 
-        bool is_alive = (bytes_received > 0);
+        char *welcome_message_buffer;
+        ssize_t result = read_until_crlf(sockfd, &welcome_message_buffer); // read the welcome message from the target server
+        std::string actual_welcome_message{welcome_message_buffer};
+        std::string expected_welcome_message = "+OK Server ready\r\n";
+        if (actual_welcome_message != expected_welcome_message)
+        {
+            std::cerr << "Warning: actual_welcome_message != expected_welcome_message" << std::endl;
+        }
+
+        bool is_alive = (result > 0);
 
         if (!is_alive) // if it's down
         {
@@ -1025,13 +1034,20 @@ void *heartbeat_thread_func(void *arg)
             std::string response = "QUIT\r\n";
             write_helper(sockfd, response);
 
-            char *quit_response;
-            ssize_t result = read_until_crlf(sockfd, &quit_response);
+            char *quit_response_buffer;
+            ssize_t result = read_until_crlf(sockfd, &quit_response_buffer);
+            std::string actual_quit_response{quit_response_buffer};
+            std::string expected_quit_response = "+OK Goodbye!\r\n";
+
             if (debug_mode)
             {
                 if (result > 0)
                 {
-                    printf("quit_response: %s", quit_response);
+                    if (actual_quit_response != expected_quit_response)
+                    {
+                        std::cerr << "Warning: actual_quit_response != expected_quit_response" << std::endl;
+                    }
+                    std::cerr << "actual_quit_response: " << actual_quit_response << std::endl; 
                 }
                 else if (result == 0)
                 {
