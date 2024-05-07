@@ -102,6 +102,16 @@ std::vector<std::string> get_alive_servers(int group_no);
 std::string get_alive_servers_string(int group_no);
 bool send_PRIM(int group_no);
 
+//////////////////////////////// RECEIVED COMMAND HANDLERS ////////////////////////////////
+void INIT_handler(std::string command, int socket_fd);
+void STAT_handler(int socket_fd);
+void GTPM_handler(std::string command, int socket_fd);
+void GTGP_handler(std::string command, int socket_fd);
+void RCVY_handler(std::string command, int socket_fd);
+void KILL_handler(std::string command, int socket_fd);
+void RVIV_handler(std::string command, int socket_fd);
+void QUIT_handler(int socket_fd);
+
 int main(int argc, char *argv[])
 {
     //////////////////////////////// REGISTERING SIGINT HANDLER ////////////////////////////////
@@ -278,15 +288,14 @@ void *frontend_thread_func(void *arg)
         std::cerr << "[" << socket_fd << "] New connection" << std::endl;
     }
     std::string welcome_message = "+OK Server ready (Author: Team 13)\r\n";
-    // bool result = write_helper(socket_fd, welcome_message);
-    // if (!result)
-    // {
-    //     std::cout << "result = false" << std::endl;
-    //     close(socket_fd);
-    //     remove_connection(socket_fd);
-    //     return NULL;
-    // }
-    write_helper(socket_fd, welcome_message);
+
+    if (!write_helper(socket_fd, welcome_message))
+    {
+        std::cerr << "Failed to send welcome message to client" << std::endl;
+        close(socket_fd);
+        remove_connection(socket_fd);
+        return NULL;
+    }
     verbose_print_helper_server(socket_fd, welcome_message);
 
     //////// Start reading from the client
@@ -371,252 +380,39 @@ void *frontend_thread_func(void *arg)
 
             if (command.substr(0, 4) == "INIT")
             {
-                std::vector<std::string> command_tokens = split_string(command, ","); // INIT,linhphan -> {INIT, linhphan}
-                if (command_tokens.size() != 2)
-                {
-                    response = "-ERR Incorrect command syntax\r\n";
-                    write_helper(socket_fd, response);
-                    continue;
-                }
-                std::string row_key = command_tokens[1];
-                char first_char = row_key.at(0);
-
-                int group_no = get_group_no_from_char(first_char);
-
-                if (group_no == -1)
-                {
-                    response = "-ERR invalid row key\r\n";
-                }
-                else
-                {
-                    std::cerr << "did we reach1" << std::endl;
-                    std::cerr << "group_no: " << group_no << std::endl;
-                    // pthread_mutex_lock(&server_status_map_mutex);
-                    if (group_primary_map.at(group_no) == "all_dead")
-                    {
-                        std::cerr << "did we reach2" << std::endl;
-                        response = "-ERR all servers are down at the moment\r\n";
-                    }
-                    else
-                    {
-                        std::cerr << "did we reach3" << std::endl;
-                        std::cerr << "group_primary_map.at(group_no): " << group_primary_map.at(group_no) << std::endl;
-                        // auto &tablet_servers_list = tablet_storage_map.at(tablet_no);
-                        auto &tablet_servers_list = tablet_storage_map.at(group_no);
-                        // if (debug_mode)
-                        // {
-                        //     std::cout << "broke here?" << std::endl;
-                        // }
-                        std::string server_ID = tablet_servers_list.front();
-                        while (!server_status_map.at(server_ID)) // if this server is dead
-                        {
-                            tablet_servers_list.erase(tablet_storage_map.at(group_no).begin());
-                            tablet_servers_list.push_back(server_ID);
-                            server_ID = tablet_servers_list.front();
-                        }
-                        // while (!server_status_map.at(server_ID)) // if this server is dead
-                        // {
-                        //     tablet_servers_list.erase(tablet_storage_map.at(group_no).begin());
-                        //     tablet_servers_list.push_back(server_ID);
-                        //     server_ID = tablet_servers_list.front();
-                        // }
-                        response = "RDIR," + server_ID + "\r\n";
-                        // update front of vector
-                        tablet_servers_list.erase(tablet_storage_map.at(group_no).begin());
-                        tablet_servers_list.push_back(server_ID);
-                    }
-                }
-                // pthread_mutex_unlock(&server_status_map_mutex);
-                write_helper(socket_fd, response);
-                verbose_print_helper_server(socket_fd, response);
+                INIT_handler(command, socket_fd);
             }
             else if (command == "STAT")
             {
-                response += "+OK,";
-                // pthread_mutex_lock(&server_status_map_mutex);
-                for (const auto &pair : server_status_map)
-                {
-                    auto temp = split_string(pair.first, ":");
-                    std::string serv_addr_str = temp[0];
-                    std::string serv_port_str = temp[1];
-                    std::string serv_status_str = std::to_string(pair.second);
-                    response += serv_addr_str + ":" + serv_port_str + ":" + serv_status_str + ",";
-                }
-                response += "\r\n";
-                write_helper(socket_fd, response);
-                verbose_print_helper_server(socket_fd, response);
-                // pthread_mutex_unlock(&server_status_map_mutex);
+                STAT_handler(socket_fd);
             }
             else if (command.substr(0, 4) == "GTPM")
             {
-                std::cout << "here1" << std::endl;
-                std::vector<std::string> command_tokens = split_string(command, ","); // INIT,linhphan -> {INIT, linhphan}
-                if (command_tokens.size() != 2)
-                {
-                    response = "-ERR Incorrect command syntax\r\n";
-                    write_helper(socket_fd, response);
-                    verbose_print_helper_server(socket_fd, response);
-                    continue;
-                }
-                std::string serverID_to_lookup = command_tokens.at(1);
-                if (serverID_group_map.count(serverID_to_lookup) == 0)
-                {
-                    response = "-ERR Invalid server address\r\n";
-                    write_helper(socket_fd, response);
-                    verbose_print_helper_server(socket_fd, response);
-                    continue;
-                }
-                std::cout << "here2" << std::endl;
-                int server_group_no = serverID_group_map.at(serverID_to_lookup);
-                std::string primaryID = group_primary_map.at(server_group_no);
-                response += "+OK " + primaryID + "\r\n";
-                write_helper(socket_fd, response);
-                verbose_print_helper_server(socket_fd, response);
+                GTPM_handler(command, socket_fd);
             }
             else if (command.substr(0, 4) == "GTGP")
             {
-                std::vector<std::string> command_tokens = split_string(command, ","); // INIT,linhphan -> {INIT, linhphan}
-                if (command_tokens.size() != 2)
-                {
-                    response = "-ERR Incorrect command syntax\r\n";
-                    write_helper(socket_fd, response);
-                    verbose_print_helper_server(socket_fd, response);
-                    continue;
-                }
-                std::string serverID_to_lookup = command_tokens.at(1);
-                if (serverID_group_map.count(serverID_to_lookup) == 0)
-                {
-                    response = "-ERR Invalid server address\r\n";
-                    write_helper(socket_fd, response);
-                    verbose_print_helper_server(socket_fd, response);
-                    continue;
-                }
-
-                response += "+OK ";
-                int server_group_no = serverID_group_map.at(serverID_to_lookup);
-                std::vector<std::string> server_list = tablet_storage_map.at(server_group_no);
-                for (const std::string &serverID : server_list)
-                {
-                    if (server_status_map.at(serverID))
-                    { // if it's alive
-                        response += serverID + ",";
-                    }
-                }
-                response = response.substr(0, response.size() - 1) + "\r\n"; // remove last char (extra ,)
-                write_helper(socket_fd, response);
-                verbose_print_helper_server(socket_fd, response);
+                GTGP_handler(command, socket_fd);
             }
             else if (command.substr(0, 4) == "RCVY")
             {
-                std::vector<std::string> command_tokens = split_string(command, ","); // INIT,linhphan -> {INIT, linhphan}
-                if (command_tokens.size() != 2)
-                {
-                    response = "-ERR Incorrect command syntax\r\n";
-                    write_helper(socket_fd, response);
-                    verbose_print_helper_server(socket_fd, response);
-                    continue;
-                }
-                std::string serverID_to_lookup = command_tokens.at(1);
-                if (serverID_group_map.count(serverID_to_lookup) == 0)
-                {
-                    response = "-ERR Invalid server address\r\n";
-                    write_helper(socket_fd, response);
-                    verbose_print_helper_server(socket_fd, response);
-                    continue;
-                }
-                // down_servers.erase(command_tokens.at(1));
-                pthread_mutex_lock(&server_status_map_mutex);
-                server_status_map.at(command_tokens.at(1)) = true;
-                int group_no = serverID_group_map.at(serverID_to_lookup);
-                if (group_primary_map.at(group_no) == "all_dead")
-                { // if all other nodes in the group are dead, the revived node becomes the primary
-                    group_primary_map.at(group_no) = serverID_to_lookup;
-                }
-                pthread_mutex_unlock(&server_status_map_mutex);
-                response = "+OK node marked as alive\r\n";
-                write_helper(socket_fd, response);
-                verbose_print_helper_server(socket_fd, response);
-                send_PRIM(group_no);
+                RCVY_handler(command, socket_fd);
             }
             else if (command.substr(0, 4) == "KILL")
             {
-                std::vector<std::string> command_tokens = split_string(command, ","); // INIT,linhphan -> {INIT, linhphan}
-                if (command_tokens.size() != 2)
-                {
-                    response = "-ERR Incorrect command syntax\r\n";
-                    write_helper(socket_fd, response);
-                    verbose_print_helper_server(socket_fd, response);
-                    continue;
-                }
-                std::string serverID_to_shutdown = command_tokens.at(1);
-                if (serverID_group_map.count(serverID_to_shutdown) == 0)
-                {
-                    response = "-ERR Invalid server address\r\n";
-                    write_helper(socket_fd, response);
-                    verbose_print_helper_server(socket_fd, response);
-                    continue;
-                }
-                std::string message_to_send = "STDN\r\n";
-                std::string expected_response = "+OK shutting down\r\n";
-                if (create_socket_send_helper(serverID_to_shutdown, message_to_send, expected_response))
-                {
-                    response = "+OK storage server shutdown requested\r\n";
-                    write_helper(socket_fd, response);
-                    verbose_print_helper_server(socket_fd, response);
-                    update_server_status_map_and_group_primary_map(serverID_to_shutdown);
-                }
-                else
-                {
-                    response = "-ERR unable to request storage server shutdown\r\n";
-                    write_helper(socket_fd, response);
-                    verbose_print_helper_server(socket_fd, response);
-                }
+                KILL_handler(command, socket_fd);
             }
             else if (command.substr(0, 4) == "RVIV")
             {
-                std::vector<std::string> command_tokens = split_string(command, ","); // INIT,linhphan -> {INIT, linhphan}
-                if (command_tokens.size() != 2)
-                {
-                    response = "-ERR Incorrect command syntax\r\n";
-                    write_helper(socket_fd, response);
-                    verbose_print_helper_server(socket_fd, response);
-                    continue;
-                }
-                std::string serverID_to_revive = command_tokens.at(1);
-                if (serverID_group_map.count(serverID_to_revive) == 0)
-                {
-                    response = "-ERR Invalid server address\r\n";
-                    write_helper(socket_fd, response);
-                    verbose_print_helper_server(socket_fd, response);
-                    continue;
-                }
-                std::string message_to_send = "RSTT\r\n";
-                std::string expected_response = "+OK recovering\r\n";
-                if (create_socket_send_helper(serverID_to_revive, message_to_send, expected_response))
-                {
-                    response = "+OK recovery requested\r\n";
-                    write_helper(socket_fd, response);
-                    verbose_print_helper_server(socket_fd, response);
-                    update_server_status_map_and_group_primary_map(serverID_to_revive);
-                }
-                else
-                {
-                    response = "-ERR server unable to perform recovery\r\n";
-                    write_helper(socket_fd, response);
-                    verbose_print_helper_server(socket_fd, response);
-                }
+                RVIV_handler(command, socket_fd);
             }
             else if (command.substr(0, 4) == "QUIT")
             {
-                response = "+OK Goodbye!\r\n";
-                write_helper(socket_fd, response);
-                verbose_print_helper_server(socket_fd, response);
-                break;
+                QUIT_handler(socket_fd);
             }
             else
             {
-                std::cout << "here3" << std::endl;
-                response = "-ERR unrecognizable command\r\n";
+                std::string response = "-ERR unrecognizable command\r\n";
                 write_helper(socket_fd, response);
                 verbose_print_helper_server(socket_fd, response);
             }
@@ -1047,7 +843,7 @@ void *heartbeat_thread_func(void *arg)
                     {
                         std::cerr << "Warning: actual_quit_response != expected_quit_response" << std::endl;
                     }
-                    std::cerr << "actual_quit_response: " << actual_quit_response << std::endl; 
+                    std::cerr << "actual_quit_response: " << actual_quit_response << std::endl;
                 }
                 else if (result == 0)
                 {
@@ -1366,3 +1162,262 @@ bool send_PRIM(int group_no)
 
     return create_socket_send_helper(group_primary_map.at(group_no), PRIM_message, expected_response);
 }
+
+void INIT_handler(std::string command, int socket_fd)
+{
+    std::string response = "";
+    std::vector<std::string> command_tokens = split_string(command, ","); // INIT,linhphan -> {INIT, linhphan}
+    if (command_tokens.size() != 2)
+    {
+        response = "-ERR Incorrect command syntax\r\n";
+        write_helper(socket_fd, response);
+        return;
+    }
+    std::string row_key = command_tokens[1];
+    char first_char = row_key.at(0);
+
+    int group_no = get_group_no_from_char(first_char);
+
+    if (group_no == -1)
+    {
+        response = "-ERR invalid row key\r\n";
+    }
+    else
+    {
+        std::cerr << "did we reach1" << std::endl;
+        std::cerr << "group_no: " << group_no << std::endl;
+        // pthread_mutex_lock(&server_status_map_mutex);
+        if (group_primary_map.at(group_no) == "all_dead")
+        {
+            std::cerr << "did we reach2" << std::endl;
+            response = "-ERR all servers are down at the moment\r\n";
+        }
+        else
+        {
+            std::cerr << "did we reach3" << std::endl;
+            std::cerr << "group_primary_map.at(group_no): " << group_primary_map.at(group_no) << std::endl;
+            // auto &tablet_servers_list = tablet_storage_map.at(tablet_no);
+            auto &tablet_servers_list = tablet_storage_map.at(group_no);
+            // if (debug_mode)
+            // {
+            //     std::cout << "broke here?" << std::endl;
+            // }
+            std::string server_ID = tablet_servers_list.front();
+            while (!server_status_map.at(server_ID)) // if this server is dead
+            {
+                tablet_servers_list.erase(tablet_storage_map.at(group_no).begin());
+                tablet_servers_list.push_back(server_ID);
+                server_ID = tablet_servers_list.front();
+            }
+            // while (!server_status_map.at(server_ID)) // if this server is dead
+            // {
+            //     tablet_servers_list.erase(tablet_storage_map.at(group_no).begin());
+            //     tablet_servers_list.push_back(server_ID);
+            //     server_ID = tablet_servers_list.front();
+            // }
+            response = "RDIR," + server_ID + "\r\n";
+            // update front of vector
+            tablet_servers_list.erase(tablet_storage_map.at(group_no).begin());
+            tablet_servers_list.push_back(server_ID);
+        }
+    }
+    // pthread_mutex_unlock(&server_status_map_mutex);
+    write_helper(socket_fd, response);
+    verbose_print_helper_server(socket_fd, response);
+}
+
+void STAT_handler(int socket_fd)
+{
+    std::string response = "";
+    response += "+OK,";
+    // pthread_mutex_lock(&server_status_map_mutex);
+    for (const auto &pair : server_status_map)
+    {
+        auto temp = split_string(pair.first, ":");
+        std::string serv_addr_str = temp[0];
+        std::string serv_port_str = temp[1];
+        std::string serv_status_str = std::to_string(pair.second);
+        response += serv_addr_str + ":" + serv_port_str + ":" + serv_status_str + ",";
+    }
+    response += "\r\n";
+    write_helper(socket_fd, response);
+    verbose_print_helper_server(socket_fd, response);
+    // pthread_mutex_unlock(&server_status_map_mutex);
+}
+
+void GTPM_handler(std::string command, int socket_fd)
+{
+    std::string response = "";
+    std::cout << "here1" << std::endl;
+    std::vector<std::string> command_tokens = split_string(command, ","); // INIT,linhphan -> {INIT, linhphan}
+    if (command_tokens.size() != 2)
+    {
+        response = "-ERR Incorrect command syntax\r\n";
+        write_helper(socket_fd, response);
+        verbose_print_helper_server(socket_fd, response);
+        return;
+    }
+    std::string serverID_to_lookup = command_tokens.at(1);
+    if (serverID_group_map.count(serverID_to_lookup) == 0)
+    {
+        response = "-ERR Invalid server address\r\n";
+        write_helper(socket_fd, response);
+        verbose_print_helper_server(socket_fd, response);
+        return;
+    }
+    std::cout << "here2" << std::endl;
+    int server_group_no = serverID_group_map.at(serverID_to_lookup);
+    std::string primaryID = group_primary_map.at(server_group_no);
+    response += "+OK " + primaryID + "\r\n";
+    write_helper(socket_fd, response);
+    verbose_print_helper_server(socket_fd, response);
+}
+
+void GTGP_handler(std::string command, int socket_fd)
+{
+    std::string response = "";
+    std::vector<std::string> command_tokens = split_string(command, ","); // INIT,linhphan -> {INIT, linhphan}
+    if (command_tokens.size() != 2)
+    {
+        response = "-ERR Incorrect command syntax\r\n";
+        write_helper(socket_fd, response);
+        verbose_print_helper_server(socket_fd, response);
+        return;
+    }
+    std::string serverID_to_lookup = command_tokens.at(1);
+    if (serverID_group_map.count(serverID_to_lookup) == 0)
+    {
+        response = "-ERR Invalid server address\r\n";
+        write_helper(socket_fd, response);
+        verbose_print_helper_server(socket_fd, response);
+        return;
+    }
+
+    response += "+OK ";
+    int server_group_no = serverID_group_map.at(serverID_to_lookup);
+    std::vector<std::string> server_list = tablet_storage_map.at(server_group_no);
+    for (const std::string &serverID : server_list)
+    {
+        if (server_status_map.at(serverID))
+        { // if it's alive
+            response += serverID + ",";
+        }
+    }
+    response = response.substr(0, response.size() - 1) + "\r\n"; // remove last char (extra ,)
+    write_helper(socket_fd, response);
+    verbose_print_helper_server(socket_fd, response);
+}
+
+void RCVY_handler(std::string command, int socket_fd)
+{
+    std::string response = "";
+    std::vector<std::string> command_tokens = split_string(command, ","); // INIT,linhphan -> {INIT, linhphan}
+    if (command_tokens.size() != 2)
+    {
+        response = "-ERR Incorrect command syntax\r\n";
+        write_helper(socket_fd, response);
+        verbose_print_helper_server(socket_fd, response);
+        return;
+    }
+    std::string serverID_to_lookup = command_tokens.at(1);
+    if (serverID_group_map.count(serverID_to_lookup) == 0)
+    {
+        response = "-ERR Invalid server address\r\n";
+        write_helper(socket_fd, response);
+        verbose_print_helper_server(socket_fd, response);
+        return;
+    }
+    // down_servers.erase(command_tokens.at(1));
+    pthread_mutex_lock(&server_status_map_mutex);
+    server_status_map.at(command_tokens.at(1)) = true;
+    int group_no = serverID_group_map.at(serverID_to_lookup);
+    if (group_primary_map.at(group_no) == "all_dead")
+    { // if all other nodes in the group are dead, the revived node becomes the primary
+        group_primary_map.at(group_no) = serverID_to_lookup;
+    }
+    pthread_mutex_unlock(&server_status_map_mutex);
+    response = "+OK node marked as alive\r\n";
+    write_helper(socket_fd, response);
+    verbose_print_helper_server(socket_fd, response);
+    send_PRIM(group_no);
+}
+
+void KILL_handler(std::string command, int socket_fd)
+{
+    std::string response = "";
+    std::vector<std::string> command_tokens = split_string(command, ","); // INIT,linhphan -> {INIT, linhphan}
+    if (command_tokens.size() != 2)
+    {
+        response = "-ERR Incorrect command syntax\r\n";
+        write_helper(socket_fd, response);
+        verbose_print_helper_server(socket_fd, response);
+        return;
+    }
+    std::string serverID_to_shutdown = command_tokens.at(1);
+    if (serverID_group_map.count(serverID_to_shutdown) == 0)
+    {
+        response = "-ERR Invalid server address\r\n";
+        write_helper(socket_fd, response);
+        verbose_print_helper_server(socket_fd, response);
+        return;
+    }
+    std::string message_to_send = "STDN\r\n";
+    std::string expected_response = "+OK shutting down\r\n";
+    if (create_socket_send_helper(serverID_to_shutdown, message_to_send, expected_response))
+    {
+        response = "+OK storage server shutdown requested\r\n";
+        write_helper(socket_fd, response);
+        verbose_print_helper_server(socket_fd, response);
+        update_server_status_map_and_group_primary_map(serverID_to_shutdown);
+    }
+    else
+    {
+        response = "-ERR unable to request storage server shutdown\r\n";
+        write_helper(socket_fd, response);
+        verbose_print_helper_server(socket_fd, response);
+    }
+}
+
+void RVIV_handler(std::string command, int socket_fd)
+{
+    std::string response = "";
+    std::vector<std::string> command_tokens = split_string(command, ","); // INIT,linhphan -> {INIT, linhphan}
+    if (command_tokens.size() != 2)
+    {
+        response = "-ERR Incorrect command syntax\r\n";
+        write_helper(socket_fd, response);
+        verbose_print_helper_server(socket_fd, response);
+        return;
+    }
+    std::string serverID_to_revive = command_tokens.at(1);
+    if (serverID_group_map.count(serverID_to_revive) == 0)
+    {
+        response = "-ERR Invalid server address\r\n";
+        write_helper(socket_fd, response);
+        verbose_print_helper_server(socket_fd, response);
+        return;
+    }
+    std::string message_to_send = "RSTT\r\n";
+    std::string expected_response = "+OK recovering\r\n";
+    if (create_socket_send_helper(serverID_to_revive, message_to_send, expected_response))
+    {
+        response = "+OK recovery requested\r\n";
+        write_helper(socket_fd, response);
+        verbose_print_helper_server(socket_fd, response);
+        update_server_status_map_and_group_primary_map(serverID_to_revive);
+    }
+    else
+    {
+        response = "-ERR server unable to perform recovery\r\n";
+        write_helper(socket_fd, response);
+        verbose_print_helper_server(socket_fd, response);
+    }
+}
+
+void QUIT_handler(int socket_fd)
+{
+    std::string response = "+OK Goodbye!\r\n";
+    write_helper(socket_fd, response);
+    verbose_print_helper_server(socket_fd, response);
+}
+
