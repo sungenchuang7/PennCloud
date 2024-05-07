@@ -5,6 +5,9 @@ smtpserver
 smtpclient
 backendserver
 masterbackendserver
+# Ignore compiled object files
+backend/backendserver
+backend/masterbackendserver
 .vscode
 *.dSYM
 .DS_Store
