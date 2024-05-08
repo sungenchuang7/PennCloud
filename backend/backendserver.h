@@ -24,6 +24,7 @@
 #include <fcntl.h>
 #include <queue>
 #include <sys/file.h>
+#include <sys/socket.h>
 
 // Parses input arguments and sets appropriate flag values.
 // @param argc  The argument count.
@@ -47,8 +48,8 @@ void signalHandler(int signal);
 // Deallocates memory for the entire KVS.
 void kvsCleanup();
 
-// Logs a user requested action. Action must be successfully executed.
-void logActivity(int nodeIndex, char tablet, std::string action, std::string row, std::string column);
+// Logs a user requested action to disk.
+void logActivity(int seqNum, char tablet, std::string action, std::string row, std::string column, std::string value, std::string length);
 
 // Saves recent activities to disk.
 void checkpointUpdate(char tablet);
@@ -61,3 +62,12 @@ void importTablet(char tablet);
 
 // Reads each tablet's record log to determine current activity count.
 void loadRecordCounts();
+
+// Requests the primary from the master for this node's replica group.
+std::string requestPrimary();
+
+// Sends a write request to the primary for replication.
+bool writeToPrimary(std::string primary, std::string action, std::string row, std::string column, std::string* data);
+
+// Sends a write request to all nodes in the replica group other than the primary.
+void writeToGroup(std::string activeNodes, std::string action, std::string row, std::string column, std::string* data);
