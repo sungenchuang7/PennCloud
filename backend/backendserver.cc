@@ -1,15 +1,16 @@
 #include "backendserver.h"
 
 bool vFlag = false, rFlag = false;  // Command line argument flags.
-bool primary = false;  // Whether or not this node is the primary storage node.
+bool currentPrimary = false;  // Whether or not this node is the current primary.
 int portNumber = 10000;  // This server's port number.
 int myIndex = 1;  // Stores the index of this node within the addresses list.
+int masterPort;  // Stores the master's port number.
+std::vector<std::string> activeNodes;  // Stores the active nodes for this replica group.
+std::string masterIP;; // Stores the master's IP address.
 std::vector<std::string> ipPorts;  // The IP:Port values for each node.
 
 std::unordered_map<std::string, std::unordered_map<std::string, std::string*>> keyValueStore; // Key-value store for this node's rows and backup storage.
-std::unordered_map<char, std::string> activityLogs; // Activity logs for each tablet A to Z.
-std::unordered_map<char, int> recordCounter; // The number of recorded activities for each tablet A to Z.
-int totalActions = 0;  // The total number of requests processed on this node.
+int sequenceNumber = 0;  // The total number of requests processed on this node. Sequence number.
 char activeTablet = '0';  // The tablet currently loaded into memory.
 
 std::vector<int> availableThreadIndices;  // Thread indices currently available for creation.
@@ -17,11 +18,11 @@ std::vector<int> closedConnections;  // Stores thread indices associated with re
 pthread_t activeThreads[100];  // Stores active threads for connection handling. Only accessed by main thread.
 pthread_t writerThread;  // The thread responsible for writing to disk.
 pthread_mutex_t threadUpdatesLock;  // Lock for accessing availableThreadIndices and closedConnections.
-pthread_mutex_t totalActionsLock;  // Lock for accessing totalActions.
-pthread_mutex_t activeTabletLock;  // Lock for accessing activeTablet.
-std::vector<std::shared_timed_mutex> kvsTabletLocks(26);  // The locks for each tablet A-Z. Manages KVS tablet and activity record access.
+pthread_mutex_t sequenceNumberLock;  // Lock for accessing sequenceNumber.
+pthread_mutex_t primaryUpdateLock;  // Lock for accessing primary status and active nodes.
+pthread_mutex_t activeTabletLock;  // Lock for accessing activeTablet. Required when swapping tablets.
+std::shared_timed_mutex readWriteLock;  // Lock for extending read and write permissions for the active tablet.
 
-bool pseudoShutDown = false; 
 bool serverShutDown = false;  // Tracks Ctrl+C command from user.
 int shutDownPipe[2];  // Pipe for communicating shutdown status to threads.
 bool shutDownCleanup = false;  // Signals when thread resources have been cleaned up.
@@ -41,8 +42,6 @@ std::string valueAdded = "+OK Value added\r\n";
 std::string dataOkay = "+OK Enter value ending with <CRLF>.<CRLF>\r\n";
 std::string secondValueOkay = "+OK Enter second value with DATA\r\n";
 std::string firstValueInvalid = "-ERR Value does not equal current value\r\n";
-std::string STDNResponse = "+OK shutting down\r\n";
-std::string RSTTResponse = "+OK recovering\r\n"; 
 
 // Main entry point for this program. See backendserver.h for function documentation.
 // @returns Exit code 0 for success, else error.
@@ -59,13 +58,12 @@ int main(int argc, char *argv[]) {
 
     // Initialize locks.
     pthread_mutex_init(&threadUpdatesLock, NULL);
-    pthread_mutex_init(&totalActionsLock, NULL);
+    pthread_mutex_init(&sequenceNumberLock, NULL);
     pthread_mutex_init(&activeTabletLock, NULL);
+    pthread_mutex_init(&primaryUpdateLock, NULL);
 
     // Establish connections and dispatch threads to handle them.
     connectionManager();
-
-    std::cerr << "end of main" << std::endl;
 
     return 0;
 }
@@ -97,9 +95,6 @@ int parseArgs(int argc, char *argv[]) {
         }  else if (optValue == 'r') {
             // Recovery option enabled.
             rFlag = true;
-        } else if (optValue == 'p') {
-            // Set this node to be the primary for the replica group.
-            primary = true;
         }
     }
 
@@ -126,6 +121,40 @@ int parseArgs(int argc, char *argv[]) {
     }
 
     portNumber = std::stoi(newPortNumber);
+
+    // Store the master's IP and port.
+    std::string masterValue;
+    portTracker = false;
+
+    for (int i = 0; i < ipPorts[0].length(); i++) {
+        if (portTracker == false && ipPorts[0][i] == ':') {
+            portTracker = true;
+        } else if (portTracker == true) {
+            masterValue += ipPorts[0][i];
+        } else {
+            masterIP += ipPorts[0][i];
+        }
+    }
+
+    masterPort = std::stoi(masterValue);
+
+    // Update primary information.
+    if (myIndex == 1) {
+        currentPrimary = true;
+        activeNodes.push_back(ipPorts[1]);
+        activeNodes.push_back(ipPorts[2]);
+        activeNodes.push_back(ipPorts[3]);
+    } else if (myIndex == 4) {
+        currentPrimary = true;
+        activeNodes.push_back(ipPorts[4]);
+        activeNodes.push_back(ipPorts[5]);
+        activeNodes.push_back(ipPorts[6]);
+    } else if (myIndex == 7) {
+        currentPrimary = true;
+        activeNodes.push_back(ipPorts[7]);
+        activeNodes.push_back(ipPorts[8]);
+        activeNodes.push_back(ipPorts[9]);
+    }
 
     return 0;
 }
@@ -288,15 +317,16 @@ void connectionManager() {
 
     // Lock cleanup.
     pthread_mutex_destroy(&threadUpdatesLock);
-    pthread_mutex_destroy(&totalActionsLock);
+    pthread_mutex_destroy(&sequenceNumberLock);
     pthread_mutex_destroy(&activeTabletLock);
+    pthread_mutex_destroy(&primaryUpdateLock);
 
     // Deallocate KVS memory.
     kvsCleanup();
 }
 
 void* workerThread(void* connectionInfo) {
-    char buf[2000];  // Communication buffer.
+    std::vector<char> buf;
     char targetTablet;
     int comm_FD = static_cast<threadDetails*>(connectionInfo)->connectionFD;
     int numRead = 0;  // The number of bytes returned by read().
@@ -306,27 +336,27 @@ void* workerThread(void* connectionInfo) {
     bool clientDisconnected = false;
     bool dataCalled = false;  // Tracks value input mode.
     bool cputSecondPass = false;  // Tracks whether or not v_1 is equal to the existing value.
-    bool swappingTablet = false;  // Tracks when to release tablet swapping key.
+    // bool swappingTablet = false;  // Tracks when to release tablet swapping key.
+    bool rwLockPickedUp = false;
+    bool writeReceived = false;  // Tracks when we are processing a write from primary.
+    bool pwrtReceived = false;  // Tracks when the primary is accepting data to be propogated.
     std::string requestedCommand = "Default";  // The client's most recently requested command.
     std::string requestedRow = "";
     std::string requestedColumn = "";
     std::string* valueData = new std::string("");  // Stores the value sent via the DATA command.
-
-    // Initialize buffers to null values.
-    memset(buf, '\0', sizeof(buf));
 
     // Write greeting to client.
     write(comm_FD, &serverGreeting[0], serverGreeting.length());
 
     // Debugger output - greeting message.
     if (vFlag == true) {
-        fprintf(stderr, "[%d] S: %s", comm_FD, serverGreeting.c_str());
+        fprintf(stderr, "[%d] S: %s", comm_FD, serverGreeting.data());
     }
 
     // Maintain connection with client and execute commands.
     while (quitCalled == false) {
         // Read user input into intermediate array.
-        char tempBuf[100];
+        std::vector<char> tempBuf(20000);
         fd_set fdSet;  // Used to keep track of both client input and the server shutdown signal.
 
         FD_ZERO(&fdSet);
@@ -334,15 +364,15 @@ void* workerThread(void* connectionInfo) {
         FD_SET(shutDownPipe[0], &fdSet);
 
         // DATA processing mode.
-        if (dataCalled == true && strlen(buf) > 0) {
+        if (dataCalled == true && buf.size() > 0) {
             bool terminate = false;
-            std::string dataToAdd = "";
+            std::vector<char> dataToAdd;
             int lastIndex = 0;
 
             // Perform pass over data to look for terminating values.
-            for (int i = 0; i < strlen(buf); i++) {
+            for (int i = 0; i < buf.size(); i++) {
                 if (buf[i] == '\r' &&
-                    strlen(buf) - 1 - i >= 4 &&
+                    buf.size() - 1 - i >= 4 &&
                     buf[i + 1] == '\n' &&
                     buf[i + 2] == '.' &&
                     buf[i + 3] == '\r' &&
@@ -355,25 +385,25 @@ void* workerThread(void* connectionInfo) {
 
             if (terminate == false) {
                 // Offload portion of buffer to valueData, or skip and read again.
-                if (strlen(buf) >= 1500) {
-                    // Offload 1000 characters.
-                    dataToAdd.append(buf, 1000);
-                    *valueData += dataToAdd;
+                if (buf.size() >= 15000) {
+                    // Offload 10000 characters.
+                    dataToAdd.insert(dataToAdd.begin(), buf.begin(), buf.begin() + 10000);
+                    valueData->append(dataToAdd.begin(), dataToAdd.end());
 
                     // Remove characters from buffer that were added to valueData.
-                    char dataTempArray[2000];
-                    strcpy(dataTempArray, buf);
-                    memset(buf, '\0', sizeof(buf));
+                    std::vector<char> dataTempArray;
+                    dataTempArray.insert(dataTempArray.begin(), buf.begin(), buf.end());
+                    buf.clear();
                     int dataBufPosition = 0;
 
-                    for (int j = 1000; j < strlen(dataTempArray); j++) {
-                        buf[dataBufPosition++] = dataTempArray[j];
+                    for (int j = 10000; j < dataTempArray.size(); j++) {
+                        buf.push_back(dataTempArray[j]);
                     }
                 }
             } else {
                 // DATA content complete. Gather last string.
-                dataToAdd.append(buf, lastIndex - 4);
-                *valueData += dataToAdd;
+                dataToAdd.insert(dataToAdd.end(), buf.begin(), buf.begin() + lastIndex - 4);
+                valueData->append(dataToAdd.begin(), dataToAdd.end());
 
                 if (requestedCommand == "CPUT" && cputSecondPass == false) {
                     // Compare v_1 to existing value.
@@ -395,53 +425,114 @@ void* workerThread(void* connectionInfo) {
                         *valueData = "";
 
                         // Release locks.
-                        kvsTabletLocks[targetTablet - 'a'].unlock();
-                        if (swappingTablet == true) {
+                        if (rwLockPickedUp == true) {
                             pthread_mutex_unlock(&activeTabletLock);
-                            swappingTablet = false;
+                            readWriteLock.unlock();
+                            rwLockPickedUp = false;
+                        } else {
+                            fprintf(stderr, "Locks logic incorrect for CPUT DATA.\n");
                         }
                     }
-                } else {
-                    // Add value to KVS and update state.
+                } else if (pwrtReceived == true) {
+                    logActivity(++sequenceNumber, targetTablet, requestedCommand, requestedRow, requestedColumn, *valueData, std::to_string(valueData->length()));
+                    keyValueStore[requestedRow][requestedColumn] = valueData;
+
+                    // Add nodes to list for parsing.
+                    std::string nodeList = "";
+                    for (int i = 0; i < activeNodes.size(); i++) {
+                        nodeList += activeNodes[i];
+                        if (i != activeNodes.size() - 1) {
+                            nodeList += ',';
+                        }
+                    }
+
+                    writeToGroup(nodeList, "PUT", requestedRow, requestedColumn, valueData);
+
                     if (write(comm_FD, &valueAdded[0], valueAdded.length()) < 0) {
                         fprintf(stderr, "DATA failed to write: %s\n", strerror(errno));
                     }
 
+                    valueData = new std::string("");
+                    cputSecondPass = false;
+                    pwrtReceived = false;
+                    requestedCommand = "Default";
+
+                    // Release locks.
+                    if (rwLockPickedUp == true) {
+                        pthread_mutex_unlock(&activeTabletLock);
+                        readWriteLock.unlock();
+                        rwLockPickedUp = false;
+                    } else {
+                        fprintf(stderr, "Locks logic incorrect for PWRT DATA.\n");
+                    }
+                } else if (writeReceived == true) {
+                    // Write received from primary. Log activity and write data to KVS.
                     if (keyValueStore[requestedRow][requestedColumn] != nullptr) {
                         delete keyValueStore[requestedRow][requestedColumn];
                     }
 
-                    logActivity(myIndex, targetTablet, requestedCommand, requestedRow, requestedColumn);
+                    logActivity(sequenceNumber, targetTablet, "PUT", requestedRow, requestedColumn, *valueData, std::to_string(valueData->length()));
                     keyValueStore[requestedRow][requestedColumn] = valueData;
+
+                    if (write(comm_FD, &valueAdded[0], valueAdded.length()) < 0) {
+                        fprintf(stderr, "DATA failed to write: %s\n", strerror(errno));
+                    }
+
                     valueData = new std::string("");
                     requestedCommand = "Default";
                     cputSecondPass = false;
+                    writeReceived = false;
 
                     // Release locks.
-                    kvsTabletLocks[targetTablet - 'a'].unlock();
-                    if (swappingTablet == true) {
+                    if (rwLockPickedUp == true) {
                         pthread_mutex_unlock(&activeTabletLock);
-                        swappingTablet = false;
+                        readWriteLock.unlock();
+                        rwLockPickedUp = false;
+                    } else {
+                        fprintf(stderr, "Lock logic incorrect WRIT DATA.\n");
+                    }
+                } else {
+                    // PUT or CPUT data received.
+
+                    // Release locks to enable primary's write request.
+                    if (rwLockPickedUp == true) {
+                        pthread_mutex_unlock(&activeTabletLock);
+                        readWriteLock.unlock();
+                        rwLockPickedUp = false;
+                    } else {
+                        fprintf(stderr, "Locks not picked up correctly for PUT/CPUT DATA.\n");
+                    }
+
+                    // Get and send write request to primary.
+                    writeToPrimary(requestPrimary(), "PUT", requestedRow, requestedColumn, valueData);
+
+                    valueData = new std::string("");
+                    requestedCommand = "Default";
+                    cputSecondPass = false;
+                    writeReceived = false;
+
+                    // Message added, respond to server.
+                    if (write(comm_FD, &valueAdded[0], valueAdded.length()) < 0) {
+                        fprintf(stderr, "DATA failed to write: %s\n", strerror(errno));
                     }
                 }
 
                 // Clean buffer.
-                char dataTempArray[2000];
-                strcpy(dataTempArray, buf);
-                memset(buf, '\0', sizeof(buf));
+                std::vector<char> dataTempArray;
+                dataTempArray.insert(dataTempArray.begin(), buf.begin(), buf.end());
+                buf.clear();
                 int dataBufPosition = 0;
 
-                if (lastIndex < 1999) {
-                    for (int j = lastIndex + 1; j < strlen(dataTempArray); j++) {
-                        buf[dataBufPosition++] = dataTempArray[j];
+                if (lastIndex < 19999) {
+                    for (int j = lastIndex + 1; j < dataTempArray.size(); j++) {
+                        buf.push_back(dataTempArray[j]);
                     }
                 }
 
                 if (vFlag == true) {
                     fprintf(stderr, "[%d] PUT/CPUT successful at the following location:\n[%d] Row: %s\n[%d] Column: %s\n[%d] Value: %s\n", 
-                            comm_FD, comm_FD, requestedRow.c_str(), comm_FD, requestedColumn.c_str(), comm_FD, keyValueStore[requestedRow][requestedColumn]->c_str());
+                            comm_FD, comm_FD, requestedRow.data(), comm_FD, requestedColumn.data(), comm_FD, keyValueStore[requestedRow][requestedColumn]->data());
                 }
-
                 // Exit DATA processing.
                 dataCalled = false;
             }
@@ -451,40 +542,35 @@ void* workerThread(void* connectionInfo) {
         int returnValue = select(comm_FD + 1, &fdSet, NULL, NULL, NULL);
 
         // Server shutdown enabled.
-        if (serverShutDown == true || pseudoShutDown == true) {
+        if (serverShutDown == true) {
             break;
         }
 
-        numRead = read(comm_FD, tempBuf, 99);
-        std::cerr << "numRead???: " << numRead << std::endl;
-
+        numRead = read(comm_FD, tempBuf.data(), 2000);
 
         // Client has disconnected without requesting QUIT or read() failed. Terminate thread.
         if (numRead <= 0) {
             clientDisconnected = true;
             break;
         }
-
-        tempBuf[numRead] = '\0';
-        std::cerr << "tempBuf???: " << tempBuf << std::endl;
         
         // Copy contents of temp array into full array.
-        strncpy(buf + strlen(buf), tempBuf, numRead);
+        buf.insert(buf.end(), tempBuf.begin(), tempBuf.begin() + numRead);
 
         // Check for complete commands in buffer. Exit loop when no commands remain.
         while (continueReading == false && quitCalled == false && dataCalled == false) {
-            for (int i = 0; i < strlen(buf) - 1; i++) {
+            for (int i = 0; i < buf.size() - 1; i++) {
                 // Last possible command in buffer. Continue reading after loop breaks.
-                if (i == strlen(buf) - 2) {
+                if (i == buf.size() - 2) {
                     continueReading = true;
                 }
 
                 if (buf[i] == '\r') {
-                    if (i < strlen(buf) - 1) {
+                    if (i < buf.size() - 1) {
                         if (buf[i + 1] == '\n') {
                             // String is complete. Check for command.
 
-                            if (strlen(buf) < 6) {
+                            if (buf.size() < 6) {
                                 // Invalid command received.
                                 if (write(comm_FD, &invalidCommand[0], invalidCommand.length()) < 0) {
                                     fprintf(stderr, "Failed to write: %s\n", strerror(errno));
@@ -493,11 +579,11 @@ void* workerThread(void* connectionInfo) {
                                 // Debugger output - invalid command.
                                 if (vFlag == true) {
                                     std::string currentCommand = "";
-                                    currentCommand.append(buf, i + 2);
-                                    fprintf(stderr, "[%d] C: %s", comm_FD, currentCommand.c_str());
-                                    fprintf(stderr, "[%d] S: %s", comm_FD, invalidCommand.c_str());
+                                    currentCommand.append(buf.begin(), buf.begin() + i + 2);
+                                    fprintf(stderr, "[%d] C: %s", comm_FD, currentCommand.data());
+                                    fprintf(stderr, "[%d] S: %s", comm_FD, invalidCommand.data());
                                 }
-                            } else if (strlen(buf) > 5 &&
+                            } else if ((buf.size() > 5) &&
                                     (buf[0] == 'q' || buf[0] == 'Q') && 
                                     (buf[1] == 'u' || buf[1] == 'U') && 
                                     (buf[2] == 'i' || buf[2] == 'I') &&
@@ -510,12 +596,13 @@ void* workerThread(void* connectionInfo) {
                                 // Debugger output - QUIT command.
                                 if (vFlag == true) {
                                     std::string currentCommand = "";
-                                    currentCommand.append(buf, i + 2);
-                                    fprintf(stderr, "[%d] C: %s", comm_FD, currentCommand.c_str());
+                                    currentCommand.append(buf.begin(), buf.begin() + i + 2);
+                                    fprintf(stderr, "[%d] C: %s", comm_FD, currentCommand.data());
                                 }
 
                                 break;
-                            } else if ((buf[0] == 'd' || buf[0] == 'D') && 
+                            } else if ((buf.size() > 5) &&
+                                    (buf[0] == 'd' || buf[0] == 'D') && 
                                     (buf[1] == 'a' || buf[1] == 'A') && 
                                     (buf[2] == 't' || buf[2] == 'T') &&
                                     (buf[3] == 'a' || buf[3] == 'A') &&
@@ -535,44 +622,7 @@ void* workerThread(void* connectionInfo) {
                                         fprintf(stderr, "DATA acceptance failed to write: %s\n", strerror(errno));
                                     }
                                 }
-                            } else if ((buf[0] == 's' || buf[0] == 'S') && 
-                                    (buf[1] == 't' || buf[1] == 'T') && 
-                                    (buf[2] == 'd' || buf[2] == 'D') &&
-                                    (buf[3] == 'n' || buf[3] == 'N') &&
-                                    (buf[4] == '\r') &&
-                                    (buf[5] == '\n')) {
-                                std::cerr << "STDN received" << std::endl; 
-                                if (write(comm_FD, STDNResponse.c_str(), STDNResponse.length()) < 0) {
-                                    fprintf(stderr, "STDN failed to write: %s\n", strerror(errno));
-                                }
-                                pseudoShutDown = true;
-                                // serverShutDown = true; 
-
-                                char* shutdownSignal = new char;
-                                *shutdownSignal = 'X';
-
-                                // Separate SIGINT from new output.
-                                fprintf(stderr, "\n");
-
-                                // Write the shutdown signal for threads to see.
-                                write(shutDownPipe[1], shutdownSignal, 1);
-
-                                delete shutdownSignal;
-                            } else if ((buf[0] == 'r' || buf[0] == 'R') && 
-                                    (buf[1] == 's' || buf[1] == 'S') && 
-                                    (buf[2] == 't' || buf[2] == 'T') &&
-                                    (buf[3] == 't' || buf[3] == 'T') &&
-                                    (buf[4] == '\r') &&
-                                    (buf[5] == '\n')) {
-                                std::cerr << "RSTT received" << std::endl; 
-                                if (write(comm_FD, RSTTResponse.c_str(), RSTTResponse.length()) < 0) {
-                                    fprintf(stderr, "RSTT failed to write: %s\n", strerror(errno));
-                                }
-                                // TODO: Add code to start recovery process here.
-                                // MUST to make sure pseudoShutDown is set to TRUE when RECOVERING
-
-
-                            } else if ((strlen(buf) > 8) &&
+                            } else if ((buf.size() > 8) &&
                                        (buf[0] == 'p' || buf[0] == 'P') &&
                                        (buf[1] == 'u' || buf[1] == 'U') &&
                                        (buf[2] == 't' || buf[2] == 'T') &&
@@ -580,7 +630,7 @@ void* workerThread(void* connectionInfo) {
                                 // PUT() called. Extract the argument and test for validity.
                                 std::string putArgument = "";
                                 bool colTracker = false;
-                                putArgument.append(buf + 4, i - 3);
+                                putArgument.append(buf.begin() + 4, buf.begin() + i);
                                 requestedRow = "";
                                 requestedColumn = "";
 
@@ -593,31 +643,24 @@ void* workerThread(void* connectionInfo) {
                                     } else if (colTracker == true) {
                                         // Add to column value.
                                         requestedColumn += putArgument[k];
-                                    } else if (putArgument[k] = ':') {
+                                    } else if (putArgument[k] == ':') {
                                         colTracker = true;
                                     }
                                 }
 
-                                // Pick up lock for this tablet.
                                 targetTablet = std::tolower(requestedRow[0]);
 
                                 if ((targetTablet - 'a' >= 0) && (targetTablet - 'a' <= 25)) {
-                                    kvsTabletLocks[targetTablet - 'a'].lock();
+                                    // Pick up lock for this tablet.
+                                    pthread_mutex_lock(&activeTabletLock);
+                                    readWriteLock.lock();
+                                    rwLockPickedUp = true;
 
                                     if (vFlag == true) {
                                         fprintf(stderr, "[%d] Unique lock picked up for tablet %c\n", comm_FD, targetTablet);
                                     }
                                 } else {
-                                    fprintf(stderr, "Error: Invalid tablet requested for DATA.\n");
-                                }
-
-                                // Swap tablet if necessary.
-                                pthread_mutex_lock(&activeTabletLock);
-                                if (activeTablet != targetTablet) {
-                                    swappingTablet = true;
-                                    importTablet(targetTablet);
-                                } else {
-                                    pthread_mutex_unlock(&activeTabletLock);
+                                    fprintf(stderr, "Error: Invalid tablet requested for PUT.\n");
                                 }
 
                                 if (requestedRow.length() == 0 || requestedColumn.length() == 0) {
@@ -626,16 +669,21 @@ void* workerThread(void* connectionInfo) {
                                         fprintf(stderr, "PUT failed to write: %s\n", strerror(errno));
                                     }
 
-                                    // Release lock for this tablet.
-                                    kvsTabletLocks[targetTablet - 'a'].unlock();
+                                    // Release locks.
+                                    if (rwLockPickedUp == true) {
+                                        pthread_mutex_unlock(&activeTabletLock);
+                                        readWriteLock.unlock();
+                                        rwLockPickedUp = false;
+                                    }
                                 } else {
                                     // Argument valid. Update state and notify client.
                                     requestedCommand = "PUT";
+
                                     if (write(comm_FD, &putOkay[0], putOkay.length()) < 0) {
                                         fprintf(stderr, "PUT failed to write: %s\n", strerror(errno));
                                     }
                                 }
-                            } else if ((strlen(buf) > 8) &&
+                            } else if ((buf.size() > 8) &&
                                        (buf[0] == 'g' || buf[0] == 'G') &&
                                        (buf[1] == 'e' || buf[1] == 'E') &&
                                        (buf[2] == 't' || buf[2] == 'T') &&
@@ -643,7 +691,7 @@ void* workerThread(void* connectionInfo) {
                                 // GET() called. Extract the argument and test for validity.
                                 std::string getArgument = "";
                                 bool colTracker = false;
-                                getArgument.append(buf + 4, i - 3);
+                                getArgument.append(buf.begin() + 4, buf.begin() + i);
                                 requestedRow = "";
                                 requestedColumn = "";
                                 requestedCommand = "DEFAULT";
@@ -657,31 +705,31 @@ void* workerThread(void* connectionInfo) {
                                     } else if (colTracker == true) {
                                         // Add to column value.
                                         requestedColumn += getArgument[k];
-                                    } else if (getArgument[k] = ':') {
+                                    } else if (getArgument[k] == ':') {
                                         colTracker = true;
                                     }
                                 }
 
-                                // Pick up lock associated with requested tablet.
+                                // Swap tablet if necessary and pick up shared lock.
                                 targetTablet = std::tolower(requestedRow[0]);
 
                                 if ((targetTablet - 'a' >= 0) && (targetTablet - 'a' <= 25)) {
-                                    kvsTabletLocks[targetTablet - 'a'].lock_shared();
+                                    // Swap tablet if necessary and pick up shared lock.
+                                    pthread_mutex_lock(&activeTabletLock);
+                                    readWriteLock.lock_shared();
+                                    rwLockPickedUp = true;
+                                    if (activeTablet != targetTablet) {
+                                        importTablet(targetTablet);
+                                        activeTablet = targetTablet;
+                                    }
+
+                                    pthread_mutex_unlock(&activeTabletLock);
 
                                     if (vFlag == true) {
                                         fprintf(stderr, "[%d] Shared lock picked up for tablet %c\n", comm_FD, targetTablet);
                                     }
                                 } else {
                                     fprintf(stderr, "Error: Invalid tablet requested for GET.\n");
-                                }
-
-                                // Swap tablet if necessary.
-                                pthread_mutex_lock(&activeTabletLock);
-                                if (activeTablet != targetTablet) {
-                                    swappingTablet = true;
-                                    importTablet(targetTablet);
-                                } else {
-                                    pthread_mutex_unlock(&activeTabletLock);
                                 }
 
                                 if (requestedRow.length() == 0 || requestedColumn.length() == 0) {
@@ -691,13 +739,11 @@ void* workerThread(void* connectionInfo) {
                                 } else if (keyValueStore[requestedRow][requestedColumn] != nullptr) {
                                     // Send the requested value to user.
                                     std::string endOutput = "\r\n.\r\n";
-
-                                    logActivity(myIndex, targetTablet, "GET", requestedRow, requestedColumn);
                                     
                                     if (write(comm_FD, &okayMessage[0], okayMessage.length()) < 0) {
                                         fprintf(stderr, "GET failed to write: %s\n", strerror(errno));
                                     }
-                                    if (write(comm_FD, keyValueStore[requestedRow][requestedColumn]->c_str(), keyValueStore[requestedRow][requestedColumn]->length()) < 0) {
+                                    if (write(comm_FD, keyValueStore[requestedRow][requestedColumn]->data(), keyValueStore[requestedRow][requestedColumn]->length()) < 0) {
                                         fprintf(stderr, "GET failed to write: %s\n", strerror(errno));
                                     }
                                     if (write(comm_FD, &endOutput[0], endOutput.length()) < 0) {
@@ -706,21 +752,20 @@ void* workerThread(void* connectionInfo) {
 
                                     if (vFlag == true) {
                                         fprintf(stderr, "[%d] GET successful at the following location:\n[%d] Row: %s\n[%d] Column: %s\n[%d] Value: %s\n", 
-                                                comm_FD, comm_FD, requestedRow.c_str(), comm_FD, requestedColumn.c_str(), comm_FD, keyValueStore[requestedRow][requestedColumn]->c_str());
+                                                comm_FD, comm_FD, requestedRow.data(), comm_FD, requestedColumn.data(), comm_FD, keyValueStore[requestedRow][requestedColumn]->data());
                                     }
                                 } else {
                                     if (write(comm_FD, &invalidValue[0], invalidValue.length()) < 0) {
-                                        fprintf(stderr, "GET failed to write: %s\n", strerror(errno));
+                                        fprintf(stderr, "GET failed to write to client: %s\n", strerror(errno));
                                     }
                                 }
 
-                                // Release locks.
-                                kvsTabletLocks[targetTablet - 'a'].unlock_shared();
-                                if (swappingTablet == true) {
-                                    pthread_mutex_unlock(&activeTabletLock);
-                                    swappingTablet = false;
+                                // Release lock.
+                                if (rwLockPickedUp == true) {
+                                    readWriteLock.unlock_shared();
+                                    rwLockPickedUp = false;
                                 }
-                            } else if ((strlen(buf) > 9) &&
+                            } else if ((buf.size() > 9) &&
                                        (buf[0] == 'c' || buf[0] == 'C') &&
                                        (buf[1] == 'p' || buf[1] == 'P') &&
                                        (buf[2] == 'u' || buf[2] == 'U') &&
@@ -729,7 +774,7 @@ void* workerThread(void* connectionInfo) {
                                 // CPUT() called. Extract the argument and test for validity.
                                 std::string cputArgument = "";
                                 bool colTracker = false;
-                                cputArgument.append(buf + 5, i - 3);
+                                cputArgument.append(buf.begin() + 5, buf.begin() + i);
                                 requestedRow = "";
                                 requestedColumn = "";
 
@@ -742,16 +787,23 @@ void* workerThread(void* connectionInfo) {
                                     } else if (colTracker == true) {
                                         // Add to column value.
                                         requestedColumn += cputArgument[k];
-                                    } else if (cputArgument[k] = ':') {
+                                    } else if (cputArgument[k] == ':') {
                                         colTracker = true;
                                     }
                                 }
 
-                                // Pick up lock for this tablet.
                                 targetTablet = std::tolower(requestedRow[0]);
 
                                 if ((targetTablet - 'a' >= 0) && (targetTablet - 'a' <= 25)) {
-                                    kvsTabletLocks[targetTablet - 'a'].lock();
+                                    // Pick up lock for this tablet.
+                                    pthread_mutex_lock(&activeTabletLock);
+                                    readWriteLock.lock();
+                                    rwLockPickedUp = true;
+
+                                    if (activeTablet != targetTablet) {
+                                        importTablet(targetTablet);
+                                        activeTablet = targetTablet;
+                                    }
 
                                     if (vFlag == true) {
                                         fprintf(stderr, "[%d] Unique lock picked up for tablet %c\n", comm_FD, targetTablet);
@@ -760,40 +812,37 @@ void* workerThread(void* connectionInfo) {
                                     fprintf(stderr, "Error: Invalid tablet requested for DATA.\n");
                                 }
 
-                                // Swap tablet if necessary.
-                                pthread_mutex_lock(&activeTabletLock);
-                                if (activeTablet != targetTablet) {
-                                    swappingTablet = true;
-                                    importTablet(targetTablet);
-                                } else {
-                                    pthread_mutex_unlock(&activeTabletLock);
-                                }
-
                                 if (requestedRow.length() == 0 || requestedColumn.length() == 0) {
                                     // Invalid argument.
                                     if (write(comm_FD, &invalidArgument[0], invalidArgument.length()) < 0) {
                                         fprintf(stderr, "CPUT failed to write: %s\n", strerror(errno));
                                     }
 
-                                    // Release lock for this tablet.
-                                    kvsTabletLocks[targetTablet - 'a'].unlock();
+                                    // Release locks.
+                                    if (rwLockPickedUp == true) {
+                                        pthread_mutex_unlock(&activeTabletLock);
+                                        readWriteLock.unlock();
+                                        rwLockPickedUp = false;
+                                    }
                                 } else {
                                     // Argument valid, update state and notify user.
                                     requestedCommand = "CPUT";
+
                                     if (write(comm_FD, &cputOkay[0], cputOkay.length()) < 0) {
                                         fprintf(stderr, "CPUT failed to write: %s\n", strerror(errno));
                                     }
                                 }
-                            } else if ((strlen(buf) > 9) &&
+                            } else if ((buf.size() > 9) &&
                                        (buf[0] == 'd' || buf[0] == 'D') &&
                                        (buf[1] == 'e' || buf[1] == 'E') &&
                                        (buf[2] == 'l' || buf[2] == 'L') &&
                                        (buf[3] == 'e' || buf[3] == 'E') &&
                                        (buf[4] == ':')) {
+
                                 // DELETE() called. Extract the argument and test for validity.
                                 std::string deleArgument = "";
                                 bool colTracker = false;
-                                deleArgument.append(buf + 5, i - 3);
+                                deleArgument.append(buf.begin() + 5, buf.begin() + i);
                                 requestedRow = "";
                                 requestedColumn = "";
                                 requestedCommand = "DEFAULT";
@@ -807,7 +856,7 @@ void* workerThread(void* connectionInfo) {
                                     } else if (colTracker == true) {
                                         // Add to column value.
                                         requestedColumn += deleArgument[k];
-                                    } else if (deleArgument[k] = ':') {
+                                    } else if (deleArgument[k] == ':') {
                                         colTracker = true;
                                     }
                                 }
@@ -818,55 +867,327 @@ void* workerThread(void* connectionInfo) {
                                         fprintf(stderr, "DELE failed to write: %s\n", strerror(errno));
                                     }
                                 } else {
-                                    // Argument accepted, delete value and notify client.
-
-                                    // Pick up lock associated with requested tablet.
+                                    // Argument accepted, send request to primary.
                                     targetTablet = std::tolower(requestedRow[0]);
-                                    if ((targetTablet - 'a' >= 0) && (targetTablet - 'a' <= 25)) {
-                                        kvsTabletLocks[targetTablet - 'a'].lock();
-
-                                        if (vFlag == true) {
-                                            fprintf(stderr, "[%d] Unique lock picked up for tablet %c\n", comm_FD, targetTablet);
-                                        }
-                                    } else {
+                                    if (((targetTablet - 'a' >= 0) && (targetTablet - 'a' <= 25)) == false) {
                                         fprintf(stderr, "Error: Invalid tablet requested for DELE.\n");
                                     }
 
-                                    // Swap tablet if necessary.
-                                    pthread_mutex_lock(&activeTabletLock);
-                                    if (activeTablet != targetTablet) {
-                                        swappingTablet = true;
-                                        importTablet(targetTablet);
-                                    } else {
-                                        pthread_mutex_unlock(&activeTabletLock);
-                                    }
+                                    bool err = writeToPrimary(requestPrimary(), "DELE", requestedRow, requestedColumn, nullptr);
 
-                                    if (keyValueStore[requestedRow][requestedColumn] != nullptr) {
+                                    if (err == false) {
+                                        // Value deleted.
                                         if (write(comm_FD, &deleteOkay[0], deleteOkay.length()) < 0) {
                                             fprintf(stderr, "DELE failed to write: %s\n", strerror(errno));
                                         }
-                                        // Deallocate memory and erase from KVS.
-                                        logActivity(myIndex, targetTablet, "DELE", requestedRow, requestedColumn);
-                                        delete keyValueStore[requestedRow][requestedColumn];
-                                        keyValueStore[requestedRow].erase(requestedColumn);
-
-                                        if (vFlag == true) {
-                                            fprintf(stderr, "[%d] DELETE successful at the following location:\n[%d] Row: %s\n[%d] Column: %s\n", 
-                                                    comm_FD, comm_FD, requestedRow.c_str(), comm_FD, requestedColumn.c_str());
-                                        }
                                     } else {
+                                        // Value does not exist.
                                         if (write(comm_FD, &invalidValue[0], invalidValue.length()) < 0) {
                                             fprintf(stderr, "DELE failed to write: %s\n", strerror(errno));
                                         }
                                     }
+                                }
+                            } else if ((buf.size() > 11) &&
+                                       (buf[0] == 'p' || buf[0] == 'P') &&
+                                       (buf[1] == 'w' || buf[1] == 'W') &&
+                                       (buf[2] == 'r' || buf[2] == 'R') &&
+                                       (buf[3] == 't' || buf[3] == 'T') &&
+                                       (buf[4] == ':')) {
+                                // WRITE request received from a secondary.
+                                
+                                std::string pwrtArgument = "";
+                                requestedCommand = "";
+                                requestedRow = "";
+                                requestedColumn = "";
+                                int indexTracker = 0;
+                                pwrtArgument.append(buf.begin() + 5, buf.begin() + i);
+                                pwrtReceived = true;
 
-                                    // Release locks.
-                                    kvsTabletLocks[targetTablet - 'a'].unlock();
-                                    if (swappingTablet == true) {
-                                        pthread_mutex_unlock(&activeTabletLock);
-                                        swappingTablet = false;
+                                // Parse the arguments.
+                                for (int i = 0; i < pwrtArgument.length(); i++) {
+                                    if (pwrtArgument[i] == ':') {
+                                        indexTracker++;
+                                    } else if (indexTracker == 0) {
+                                        requestedCommand += pwrtArgument[i];
+                                    } else if (indexTracker == 1) {
+                                        requestedRow += pwrtArgument[i];
+                                    } else {
+                                        requestedColumn += pwrtArgument[i];
                                     }
                                 }
+
+                                targetTablet = std::tolower(requestedRow[0]);
+
+                                // Pick up locks for write request and swap tablet if necessary.
+                                pthread_mutex_lock(&activeTabletLock);
+                                readWriteLock.lock_shared();
+                                rwLockPickedUp = true;
+                                if (activeTablet != targetTablet) {
+                                    importTablet(targetTablet);
+                                    activeTablet = targetTablet;
+                                }
+
+                                if (write(comm_FD, &putOkay[0], putOkay.length()) < 0) {
+                                    fprintf(stderr, "PWRT failed to write: %s\n", strerror(errno));
+                                }
+
+                                int replicaGroup = 0;
+                                if (myIndex == 1 || myIndex == 2 || myIndex == 3) {
+                                    replicaGroup = 1;
+                                } else if (myIndex == 4 || myIndex == 5 || myIndex == 6) {
+                                    replicaGroup = 2;
+                                } else if (myIndex == 7 || myIndex == 8 || myIndex == 9) {
+                                    replicaGroup = 3;
+                                }
+
+                                fprintf(stderr, "[Current Primary: %s] Write completed for replica group #%d.\n", ipPorts[myIndex].data(), replicaGroup);
+                            }  else if ((buf.size() > 7) &&
+                                       (buf[0] == 'p' || buf[0] == 'P') &&
+                                       (buf[1] == 'd' || buf[1] == 'D') &&
+                                       (buf[2] == 'e' || buf[2] == 'E') &&
+                                       (buf[3] == 'l' || buf[3] == 'L') &&
+                                       (buf[4] == ':')) {
+                                // DELETE request received from secondary.
+
+                                std::string pdelArgument = "";
+                                requestedCommand = "DELE";
+                                requestedRow = "";
+                                requestedColumn = "";
+                                int indexTracker = 0;
+                                bool valueExists = true;
+                                pdelArgument.append(buf.begin() + 5, buf.begin() + i);
+
+                                // Parse the arguments.
+                                for (int i = 0; i < pdelArgument.length(); i++) {
+                                    if (pdelArgument[i] == ':') {
+                                        indexTracker++;
+                                    } else if (indexTracker == 0) {
+                                        requestedRow += pdelArgument[i];
+                                    } else if (indexTracker == 1) {
+                                        requestedColumn += pdelArgument[i];
+                                    }
+                                }
+
+                                targetTablet = std::tolower(requestedRow[0]);
+
+                                // Pick up locks for delete request and swap tablet if necessary.
+                                pthread_mutex_lock(&activeTabletLock);
+                                readWriteLock.lock();
+                                rwLockPickedUp = true;
+                                if (activeTablet != targetTablet) {
+                                    importTablet(targetTablet);
+                                    activeTablet = targetTablet;
+                                }
+
+                                if (keyValueStore[requestedRow][requestedColumn] != nullptr) {
+                                    // Deallocate memory and erase from KVS.
+                                    logActivity(++sequenceNumber, targetTablet, "DELE", requestedRow, requestedColumn, "", "");
+                                    delete keyValueStore[requestedRow][requestedColumn];
+                                    keyValueStore[requestedRow].erase(requestedColumn);
+
+                                    // Add nodes to list for parsing.
+                                    std::string nodeList = "";
+                                    for (int i = 0; i < activeNodes.size(); i++) {
+                                        nodeList += activeNodes[i];
+                                        if (i != activeNodes.size() - 1) {
+                                            nodeList += ',';
+                                        }
+                                    }
+
+                                    writeToGroup(nodeList, "DELE", requestedRow, requestedColumn, nullptr);
+
+                                    if (vFlag == true) {
+                                        fprintf(stderr, "[%d] DELETE successful at the following location:\n[%d] Row: %s\n[%d] Column: %s\n", 
+                                                comm_FD, comm_FD, requestedRow.data(), comm_FD, requestedColumn.data());
+                                    }
+                                    int replicaGroup = 0;
+                                    if (myIndex == 1 || myIndex == 2 || myIndex == 3) {
+                                        replicaGroup = 1;
+                                    } else if (myIndex == 4 || myIndex == 5 || myIndex == 6) {
+                                        replicaGroup = 2;
+                                    } else if (myIndex == 7 || myIndex == 8 || myIndex == 9) {
+                                        replicaGroup = 3;
+                                    }
+                                    fprintf(stderr, "[Current Primary: %s] Delete completed for replica group #%d.\n", ipPorts[myIndex].data(), replicaGroup);
+                                } else {
+                                    valueExists = false;
+                                }
+
+                                if (valueExists == true) {
+                                    if (write(comm_FD, &deleteOkay[0], deleteOkay.length()) < 0) {
+                                        fprintf(stderr, "PDEL failed to write: %s\n", strerror(errno));
+                                    }
+                                } else {
+                                    if (write(comm_FD, &invalidValue[0], invalidValue.length()) < 0) {
+                                        fprintf(stderr, "PDEL failed to write: %s\n", strerror(errno));
+                                    }
+                                }
+
+                                // Release locks.
+                                if (rwLockPickedUp == true) {
+                                    pthread_mutex_unlock(&activeTabletLock);
+                                    readWriteLock.unlock();
+                                    rwLockPickedUp = false;
+                                } else {
+                                    fprintf(stderr, "Lock logic incorrect PDEL.\n");
+                                }
+                            }  else if ((buf.size() > 7) &&
+                                       (buf[0] == 'w' || buf[0] == 'W') &&
+                                       (buf[1] == 'r' || buf[1] == 'R') &&
+                                       (buf[2] == 'i' || buf[2] == 'I') &&
+                                       (buf[3] == 't' || buf[3] == 'T') &&
+                                       (buf[4] == ':')) {
+                                // WRITE command received from primary.
+                                // Parse argument.
+                                std::string writArgument = "";
+                                requestedCommand = "";
+                                requestedRow = "";
+                                requestedColumn = "";
+                                std::string newSequenceNumber;
+                                int indexTracker = 0;
+                                writArgument.append(buf.begin() + 5, buf.begin() + i);
+                                writeReceived = true;
+
+                                // Parse the arguments.
+                                for (int i = 0; i < writArgument.length(); i++) {
+                                    if (writArgument[i] == ':') {
+                                        indexTracker++;
+                                    } else if (indexTracker == 0) {
+                                        requestedCommand += writArgument[i];
+                                    } else if (indexTracker == 1) {
+                                        requestedRow += writArgument[i];
+                                    } else if (indexTracker == 2) {
+                                        requestedColumn += writArgument[i];
+                                    } else {
+                                        newSequenceNumber += writArgument[i];
+                                    }
+                                }
+
+                                targetTablet = std::tolower(requestedRow[0]);
+                                sequenceNumber = std::stoi(newSequenceNumber);
+
+                                // Pick up locks for write request and swap tablet if necessary.
+                                pthread_mutex_lock(&activeTabletLock);
+                                readWriteLock.lock();
+                                rwLockPickedUp = true;
+                                if (activeTablet != targetTablet) {
+                                    importTablet(targetTablet);
+                                    activeTablet = targetTablet;
+                                }
+
+                                if (write(comm_FD, &putOkay[0], putOkay.length()) < 0) {
+                                    fprintf(stderr, "WRIT failed to write: %s\n", strerror(errno));
+                                }
+
+                                int replicaGroup = 0;
+                                if (myIndex == 1 || myIndex == 2 || myIndex == 3) {
+                                    replicaGroup = 1;
+                                } else if (myIndex == 4 || myIndex == 5 || myIndex == 6) {
+                                    replicaGroup = 2;
+                                } else if (myIndex == 7 || myIndex == 8 || myIndex == 9) {
+                                    replicaGroup = 3;
+                                }
+                                fprintf(stderr, "[Replica: %s] Write completed at secondary node of replica group #%d.\n", ipPorts[myIndex].data(), replicaGroup);
+                            }  else if ((buf.size() > 7) &&
+                                       (buf[0] == 'r' || buf[0] == 'R') &&
+                                       (buf[1] == 'e' || buf[1] == 'E') &&
+                                       (buf[2] == 'm' || buf[2] == 'M') &&
+                                       (buf[3] == 'v' || buf[3] == 'V') &&
+                                       (buf[4] == ':')) {
+                                // DELETE command received from primary.
+
+                                // Parse the arguments.
+                                std::string remvArgument = "";
+                                requestedCommand = "";
+                                requestedRow = "";
+                                requestedColumn = "";
+                                std::string newSequenceNumber;
+                                int indexTracker = 0;
+                                remvArgument.append(buf.begin() + 5, buf.begin() + i);
+
+                                // Parse the arguments.
+                                for (int i = 0; i < remvArgument.length(); i++) {
+                                    if (remvArgument[i] == ':') {
+                                        indexTracker++;
+                                    } else if (indexTracker == 0) {
+                                        requestedRow += remvArgument[i];
+                                    } else if (indexTracker == 1) {
+                                        requestedColumn += remvArgument[i];
+                                    } else {
+                                        newSequenceNumber += remvArgument[i];
+                                    }
+                                }
+
+                                targetTablet = std::tolower(requestedRow[0]);
+                                sequenceNumber = std::stoi(newSequenceNumber);
+
+                                // Pick up locks for delete request and swap tablet if necessary.
+                                pthread_mutex_lock(&activeTabletLock);
+                                readWriteLock.lock();
+                                rwLockPickedUp = true;
+                                if (activeTablet != targetTablet) {
+                                    importTablet(targetTablet);
+                                    activeTablet = targetTablet;
+                                }
+
+                                if (keyValueStore[requestedRow][requestedColumn] != nullptr) {
+                                    // Deallocate memory and erase from KVS.
+                                    logActivity(sequenceNumber, targetTablet, "DELE", requestedRow, requestedColumn, "", "");
+                                    delete keyValueStore[requestedRow][requestedColumn];
+                                    keyValueStore[requestedRow].erase(requestedColumn);
+
+                                    fprintf(stderr, "[%d] DELETE successful at the following location:\n[%d] Row: %s\n[%d] Column: %s\n", 
+                                            comm_FD, comm_FD, requestedRow.data(), comm_FD, requestedColumn.data());
+                                }
+
+                                if (write(comm_FD, &deleteOkay[0], deleteOkay.length()) < 0) {
+                                    fprintf(stderr, "REMV failed to write: %s\n", strerror(errno));
+                                }
+
+                                int replicaGroup = 0;
+                                if (myIndex == 1 || myIndex == 2 || myIndex == 3) {
+                                    replicaGroup = 1;
+                                } else if (myIndex == 4 || myIndex == 5 || myIndex == 6) {
+                                    replicaGroup = 2;
+                                } else if (myIndex == 7 || myIndex == 8 || myIndex == 9) {
+                                    replicaGroup = 3;
+                                }
+                                fprintf(stderr, "[Replica: %s] Delete completed at secondary node of replica group #%d.\n", ipPorts[myIndex].data(), replicaGroup);
+
+                                // Release locks.
+                                if (rwLockPickedUp == true) {
+                                    pthread_mutex_unlock(&activeTabletLock);
+                                    readWriteLock.unlock();
+                                    rwLockPickedUp = false;
+                                } else {
+                                    fprintf(stderr, "Lock logic incorrect REMV.\n");
+                                }
+                            }  else if ((buf.size() > 7) &&
+                                       (buf[0] == 'p' || buf[0] == 'P') &&
+                                       (buf[1] == 'r' || buf[1] == 'R') &&
+                                       (buf[2] == 'i' || buf[2] == 'I') &&
+                                       (buf[3] == 'm' || buf[3] == 'M') &&
+                                       (buf[4] == ':')) {
+                                // Backend server down. Update primary status and list of active storage servers.
+                                pthread_mutex_lock(&primaryUpdateLock);
+                                currentPrimary = true;
+                                activeNodes.clear();
+
+                                // Parse the arguments.
+                                std::string primArgument = "";
+                                std::string nextValue = "";
+                                int indexTracker = 0;
+                                primArgument.append(buf.begin() + 5, buf.begin() + i);
+                                std::stringstream ss(primArgument);
+
+                                while (!ss.eof()) {
+                                    std::getline(ss, nextValue, ',');
+                                    activeNodes.push_back(nextValue);
+                                }
+
+                                pthread_mutex_unlock(&primaryUpdateLock);
+
+                                fprintf(stderr, "[Current Primary: %s] Storage server down. Currently active nodes: %s\n", ipPorts[myIndex].data(), primArgument.data());
                             } else {
                                 // Invalid command received.
                                 if (write(comm_FD, &invalidCommand[0], invalidCommand.length()) < 0) {
@@ -876,20 +1197,19 @@ void* workerThread(void* connectionInfo) {
                                 // Debugger output - invalid command.
                                 if (vFlag == true) {
                                     std::string currentCommand = "";
-                                    currentCommand.append(buf, i + 2);
-                                    fprintf(stderr, "[%d] C: %s", comm_FD, currentCommand.c_str());
-                                    fprintf(stderr, "[%d] S: %s", comm_FD, invalidCommand.c_str());
+                                    currentCommand.append(buf.begin(), buf.begin() + i + 2);
+                                    fprintf(stderr, "[%d] C: %s", comm_FD, currentCommand.data());
+                                    fprintf(stderr, "[%d] S: %s", comm_FD, invalidCommand.data());
                                 }
                             }
 
                             // Remove the previous command from the buffer.
-                            char tempArray[2000];
-                            strcpy(tempArray, buf);
-                            memset(buf, '\0', sizeof(buf));
-                            int bufPosition = 0;
+                            std::vector<char> tempArray;
+                            tempArray.insert(tempArray.begin(), buf.begin(), buf.end());
+                            buf.clear();
 
-                            for (int j = i + 2; j < strlen(tempArray); j++) {
-                                buf[bufPosition++] = tempArray[j];
+                            for (int j = i + 2; j < tempArray.size(); j++) {
+                                buf.push_back(tempArray[j]);
                             }
 
                             // Done checking for command, continue accepting input.
@@ -902,29 +1222,18 @@ void* workerThread(void* connectionInfo) {
 
         continueReading = false;
     }
-    
 
-    if (serverShutDown || pseudoShutDown) {
-        // Server shutting down. Write message to client and close connection.
-        write(comm_FD, &serverShutDownMessage[0], serverShutDownMessage.length());
-
-        // Debugger output - server shutdown enabled and connection closed.
-        if (vFlag == true) {
-            fprintf(stderr, "[%d] S: %s", comm_FD, serverShutDownMessage.c_str());
-            fprintf(stderr, "[%d] Connection closed\n", comm_FD);
-        }
-
-        close(comm_FD);
-    } else {
+    if (serverShutDown == false) {
         if (clientDisconnected == false) {
             // Quit requested. Send farewell message and close this connection.
             write(comm_FD, &quitMessage[0], quitMessage.length());
 
             // Debugger output - farewell message.
             if (vFlag == true) {
-                fprintf(stderr, "[%d] S: %s", comm_FD, quitMessage.c_str());
+                fprintf(stderr, "[%d] S: %s", comm_FD, quitMessage.data());
             }
         }
+
         // Close the connection and update active fileDescriptors.
         close(comm_FD);
 
@@ -932,6 +1241,17 @@ void* workerThread(void* connectionInfo) {
         if (vFlag == true) {
             fprintf(stderr, "[%d] Connection closed\n", comm_FD);
         }
+    } else {
+        // Server shutting down. Write message to client and close connection.
+        write(comm_FD, &serverShutDownMessage[0], serverShutDownMessage.length());
+
+        // Debugger output - server shutdown enabled and connection closed.
+        if (vFlag == true) {
+            fprintf(stderr, "[%d] S: %s", comm_FD, serverShutDownMessage.data());
+            fprintf(stderr, "[%d] Connection closed\n", comm_FD);
+        }
+
+        close(comm_FD);
     }
 
     // Update active thread information, clean up memory, and exit.
@@ -947,12 +1267,10 @@ void* workerThread(void* connectionInfo) {
         delete valueData;
     }
 
-    std::cerr << "before exiting worker" << std::endl;
     pthread_exit(NULL);
 }
 
 void signalHandler(int signal) {
-    std::cerr << "entered signalHandler" << std::endl; 
     serverShutDown = true;
     char* shutdownSignal = new char;
     *shutdownSignal = 'X';
@@ -977,34 +1295,70 @@ void kvsCleanup() {
     keyValueStore.clear();
 }
 
-void logActivity(int nodeIndex, char tablet, std::string action, std::string row, std::string column) {
-    // Pick up lock for totalActions counter.
-    pthread_mutex_lock(&totalActionsLock);
+void logActivity(int seqNum, char tablet, std::string action, std::string row, std::string column, std::string value, std::string length) {
+    // Format - Sequence Number : Total Record ID : Node ID : Action type : Row : Column : Timestamp
+    std::string currentRecord = "";
+    tablet = std::tolower(tablet);
 
-    // Format - Tablet Record ID : Total Record ID : Node ID : Action type : Row : Column : Timestamp
-    const auto currentTime = std::chrono::system_clock::now();
-    const std::time_t toTime = std::chrono::system_clock::to_time_t(currentTime);
-    std::string timeStr(std::ctime(&toTime));
-    std::string currentRecord = std::to_string(++recordCounter[tablet]) + ':' + 
-                                std::to_string(++totalActions) + ':' +
-                                std::to_string(nodeIndex) + ':' + 
-                                action + ':' + 
-                                row + ':' + 
-                                column + ':' + 
-                                timeStr;
-    activityLogs[tablet] += currentRecord;
-
-    if (vFlag == true) {
-        fprintf(stderr, "Activity recorded: %s", currentRecord.c_str());
+    if (action == "PUT") {
+        currentRecord = std::to_string(seqNum) + ':' +
+                        action + ':' + 
+                        row + ':' + 
+                        column + ':' + 
+                        length + '\n' + 
+                        value;
+    } else if (action == "DELE") {
+        currentRecord = std::to_string(seqNum) + ':' +
+                        action + ':' + 
+                        row + ':' + 
+                        column + '\n';
     }
 
-    // Release lock for totalActions counter.
-    pthread_mutex_unlock(&totalActionsLock);
+    // Write log record to disk.
+    char myDirectory[PATH_MAX];
+    int currentFD;
+    getcwd(myDirectory, sizeof(myDirectory));
+    std::string logDirectory(myDirectory);
+    logDirectory = logDirectory + '/' + "storage_node_" + std::to_string(myIndex) + "/activity_logs/" + "tablet_log_" + tablet;
+    currentFD = open(logDirectory.data(), O_RDWR | O_CREAT | O_APPEND, S_IRUSR | S_IWUSR);
+    flock(currentFD, LOCK_EX);
+
+    if (vFlag == true) {
+        fprintf(stderr, "Writing log record to file:%s\n", logDirectory.data());
+    }
+
+    if (write(currentFD, currentRecord.data(), currentRecord.length()) < 0) {
+        fprintf(stderr, "Failed to log activity to disk: %s\n", strerror(errno));
+    }
+
+    // Release lock and close file.
+    flock(currentFD, LOCK_UN);
+    close(currentFD);
+
+    // Write most recently recorded sequence number to disk.
+    std::string seqDirectory(myDirectory);
+    seqDirectory = seqDirectory + '/' + "storage_node_" + std::to_string(myIndex) + "/activity_logs/" + "sequence_number_" + tablet;
+    currentFD = open(seqDirectory.data(), O_RDWR | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
+    flock(currentFD, LOCK_EX);
+
+    if (vFlag == true) {
+        fprintf(stderr, "Writing log records to file:%s\n", seqDirectory.data());
+    }
+
+    if (write(currentFD, std::to_string(seqNum).data(), std::to_string(seqNum).length()) < 0) {
+        fprintf(stderr, "Failed to write activity log to disk: %s\n", strerror(errno));
+    }
+
+    // Release lock and close file.
+    flock(currentFD, LOCK_UN);
+    close(currentFD);
+
+    if (vFlag == true) {
+        fprintf(stderr, "Activity recorded: %s", currentRecord.data());
+    }
 }
 
 void checkpointUpdate() {
-    std::istringstream iss(activityLogs[activeTablet]);
-
     if (vFlag == true) {
         fprintf(stderr, "Writing checkpoint for tablet: %c\n", activeTablet);
     }
@@ -1016,7 +1370,7 @@ void checkpointUpdate() {
     
     // Open and lock file.
     directory = directory + '/' + "storage_node_" + std::to_string(myIndex) + "/tablets/" + "tablet_" + activeTablet;
-    currentFD = open(directory.c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
+    currentFD = open(directory.data(), O_RDWR | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
     flock(currentFD, LOCK_EX);
 
     for (auto currentRow : keyValueStore) {
@@ -1025,12 +1379,12 @@ void checkpointUpdate() {
                 std::string header = currentRow.first + ':' + currentColumn.first + ':' + std::to_string(keyValueStore[currentRow.first][currentColumn.first]->length()) + '\n';
 
                 // Write the header information to disk.
-                if (write(currentFD, header.c_str(), header.length()) < 0) {
+                if (write(currentFD, header.data(), header.length()) < 0) {
                     fprintf(stderr, "Failed to write checkpoint to disk: %s\n", strerror(errno));
                 }
 
                 // Write the value to disk.
-                if (write(currentFD, keyValueStore[currentRow.first][currentColumn.first]->c_str(), keyValueStore[currentRow.first][currentColumn.first]->length()) < 0) {
+                if (write(currentFD, keyValueStore[currentRow.first][currentColumn.first]->data(), keyValueStore[currentRow.first][currentColumn.first]->length()) < 0) {
                     fprintf(stderr, "Failed to write checkpoint to disk: %s\n", strerror(errno));
                 }
             }
@@ -1041,26 +1395,11 @@ void checkpointUpdate() {
     flock(currentFD, LOCK_UN);
     close(currentFD);
 
-    // Write log record to disk.
+    // Clear the log file.
     std::string logDirectory(myDirectory);
     logDirectory = logDirectory + '/' + "storage_node_" + std::to_string(myIndex) + "/activity_logs/" + "tablet_log_" + activeTablet;
-    currentFD = open(logDirectory.c_str(), O_RDWR | O_CREAT | O_APPEND, S_IRUSR | S_IWUSR);
-    flock(currentFD, LOCK_EX);
-
-    if (vFlag == true) {
-        fprintf(stderr, "Writing log records to file:%s\n", logDirectory.c_str());
-    }
-
-    if (write(currentFD, activityLogs[activeTablet].c_str(), activityLogs[activeTablet].length()) < 0) {
-        fprintf(stderr, "Failed to write activity log to disk: %s\n", strerror(errno));
-    }
-
-    // Release lock and close file.
-    flock(currentFD, LOCK_UN);
+    currentFD = open(logDirectory.data(), O_RDWR | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
     close(currentFD);
-
-    // Reset the activity log.
-    activityLogs.erase(activeTablet);
 }
 
 void* diskUpdatesThread(void* threadInfo) {
@@ -1068,14 +1407,12 @@ void* diskUpdatesThread(void* threadInfo) {
         pthread_mutex_lock(&activeTabletLock);
         
         if (activeTablet != '0') {
-            // If a new activity has been recorded for this tablet, perform checkpoint.
-            if (activityLogs[activeTablet].length() > 0) {
-                if (vFlag == true) {
-                    fprintf(stderr, "[Writer Thread] Performing checkpoint for tablet %c\n", activeTablet);
-                }
-
-                checkpointUpdate();
+            // Tablet valid. Perform checkpoint.
+            if (vFlag == true) {
+                fprintf(stderr, "[Writer Thread] Performing checkpoint for tablet %c\n", activeTablet);
             }
+
+            checkpointUpdate();
             
             if (serverShutDown == true) {
                 // CTRL+C requested.
@@ -1085,8 +1422,13 @@ void* diskUpdatesThread(void* threadInfo) {
         
         pthread_mutex_unlock(&activeTabletLock);
 
+        if (serverShutDown == true) {
+            // CTRL+C requested.
+            break;
+        }
+
         // Periodically wait before performing the next update.
-        sleep(1);
+        sleep(10);
 
         if (serverShutDown == true) {
             // CTRL+C requested.
@@ -1101,8 +1443,8 @@ void importTablet(char tablet) {
     char lastTablet = activeTablet;
 
     if (lastTablet != '0') {
-        // Pick up lock for the last tablet.
-        kvsTabletLocks[lastTablet - 'a'].lock();
+        // // Pick up lock for the last tablet.
+        // kvsTabletLocks[lastTablet - 'a'].lock();
 
         // Perform checkpointing on last tablet.
         checkpointUpdate();
@@ -1111,10 +1453,10 @@ void importTablet(char tablet) {
         kvsCleanup();
     } else {
         // This is the first tablet being imported.
-        activeTablet = tablet;
+        activeTablet = std::tolower(tablet);
     }
 
-    char buf[2000];
+    std::vector<char> buf;
     char myDirectory[PATH_MAX];
     bool readingValue = false;
     bool endOfFile = false;
@@ -1134,17 +1476,16 @@ void importTablet(char tablet) {
 
     // Open file and pick up file lock.
     directory = directory + '/' + "storage_node_" + std::to_string(myIndex) + "/tablets/" + "tablet_" + tablet;
-    currentFD = open(directory.c_str(), O_RDWR | S_IRUSR | S_IWUSR);
+    currentFD = open(directory.data(), O_RDWR | S_IRUSR | S_IWUSR);
     flock(currentFD, LOCK_EX);
-    memset(buf, '\0', sizeof(buf));
 
     while (currentFD != -1) {
-        char tempBuf[100];  // Temporary buffer for reading data.
+        std::vector<char> tempBuf(20000);  // Temporary buffer for reading data.
 
         // Value collection mode enabled.
         if (readingValue == true) {            
             // Gather value from the buffer.
-            for (int i = 0; i < strlen(buf); i++) {
+            for (int i = 0; i < buf.size(); i++) {
                 stringBuffer += buf[i];
                 lastIndex = i + 1;
                 
@@ -1154,7 +1495,7 @@ void importTablet(char tablet) {
                     keyValueStore[currentRow][currentColumn] = new std::string(stringBuffer);
 
                     if (vFlag == true) {
-                        fprintf(stderr, "Imported row, column: %s, %s\n", currentRow.c_str(), currentColumn.c_str());
+                        fprintf(stderr, "Imported row, column: %s, %s\n", currentRow.data(), currentColumn.data());
                     }
 
                     currentRow = "";
@@ -1165,18 +1506,18 @@ void importTablet(char tablet) {
             }
 
             // Final value added to KVS. Exit loop.
-            if (endOfFile == true && lastIndex == strlen(buf)) {
+            if (endOfFile == true && lastIndex == buf.size()) {
                 break;
             }
 
             // Remove the read contents from the buffer.
-            char dataTempArray[2000];
-            strcpy(dataTempArray, buf);
-            memset(buf, '\0', sizeof(buf));
+            std::vector<char> dataTempArray;
+            dataTempArray.insert(dataTempArray.begin(), buf.begin(), buf.end());
+            buf.clear();
             int dataBufPosition = 0;
 
-            for (int j = lastIndex; j < strlen(dataTempArray); j++) {
-                buf[dataBufPosition++] = dataTempArray[j];
+            for (int j = lastIndex; j < dataTempArray.size(); j++) {
+                buf.push_back(dataTempArray[j]);
             }
         }
 
@@ -1186,26 +1527,24 @@ void importTablet(char tablet) {
         }
 
         // Read in the data and store it in the temp buffer.
-        numRead = read(currentFD, tempBuf, 99);
+        numRead = read(currentFD, tempBuf.data(), 2000);
 
         if (numRead == 0) {
             // End of file reached.
-            endOfFile == true;
+            endOfFile = true;
         }
 
-        tempBuf[numRead] = '\0';
-
         // Copy contents of temp array into full array.
-        strncpy(buf + strlen(buf), tempBuf, numRead);
+        buf.insert(buf.end(), tempBuf.begin(), tempBuf.begin() + numRead);
 
         // No contents to parse. Exit loop.
-        if (strlen(buf) == 0) {
+        if (buf.size() == 0) {
             break;
         }
         
         while (readingValue == false) {
             // Determine the next row, column, and value size.
-            for (int i = 0; i < strlen(buf); i++) {
+            for (int i = 0; i < buf.size(); i++) {
                 if (buf[i] == '\n') {
                     // Size and header fully extracted.
                     targetSize = std::stoi(rawTargetSize);
@@ -1215,13 +1554,13 @@ void importTablet(char tablet) {
                     lastIndex = i + 1;
 
                     // Remove the header from the buffer.
-                    char dataTempArray[2000];
-                    strcpy(dataTempArray, buf);
-                    memset(buf, '\0', sizeof(buf));
+                    std::vector<char> dataTempArray;
+                    dataTempArray.insert(dataTempArray.begin(), buf.begin(), buf.end());
+                    buf.clear();
                     int dataBufPosition = 0;
 
-                    for (int j = lastIndex; j < strlen(dataTempArray); j++) {
-                        buf[dataBufPosition++] = dataTempArray[j];
+                    for (int j = lastIndex; j < dataTempArray.size(); j++) {
+                        buf.push_back(dataTempArray[j]);
                     }
 
                     break;
@@ -1254,14 +1593,622 @@ void importTablet(char tablet) {
     flock(currentFD, LOCK_UN);
     close(currentFD);
 
-    activeTablet = tablet;
-
-    if (lastTablet != '0') {
-        // Release lock for the old tablet.
-        kvsTabletLocks[lastTablet - 'a'].unlock();
-    }
+    activeTablet = std::tolower(tablet);
 }
 
 void loadRecordCounts() {
 
+}
+
+std::string requestPrimary() {
+    std::string primary;
+    int openFD;
+    int numRead;
+    int status;
+    struct sockaddr_in address;
+    std::vector<char> buf;  // Buffer to store server response.
+    std::vector<char> tempBuf(20000);  // Stores reads and transfers values to buf.
+    std::string command = "GTPM," + ipPorts[myIndex] + "\r\n";
+
+    if ((openFD = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+        fprintf(stderr, "Error opening socket in request primary\n");
+    }
+
+    address.sin_family = AF_INET;
+    address.sin_port = htons(masterPort);
+
+    if (inet_pton(AF_INET, masterIP.data(), &address.sin_addr) <= 0) {
+        fprintf(stderr, "Invalid address in request primary\n");
+    }
+
+    if ((status = connect(openFD, (struct sockaddr*)&address, sizeof(address))) < 0) {
+        fprintf(stderr, "Unable to connect in request primary\n");
+    }
+
+    // Get welcome message from server.
+    while (true) {
+        numRead = read(openFD, tempBuf.data(), 2000);
+
+        if (numRead <= 0) {
+            fprintf(stderr, "Server disconnected or error occurred in request primary\n");
+        }
+
+        // Transfer read data to buf.
+        for (int i = 0; i < numRead; i++) {
+            buf.push_back(tempBuf[i]);
+        }
+
+        // Check if full message was acquired.
+        if (buf.size() == 36 && buf[0] == '+') {
+            buf.clear();
+            tempBuf.clear();
+            break;
+        } else {
+            // Clear tempBuf and try again.
+            tempBuf.clear();
+        }
+    }
+
+    // Send command to server.
+    write(openFD, &command[0], command.length());
+
+    // Get primary response from server.
+    while (true) {
+        numRead = read(openFD, tempBuf.data(), 2000);
+
+        if (numRead <= 0) {
+            fprintf(stderr, "Server disconnected or error occurred in request primary\n");
+        }
+
+        // Transfer read data to buf.
+        for (int i = 0; i < numRead; i++) {
+            buf.push_back(tempBuf[i]);
+        }
+
+        // Check if full message was acquired.
+        if (buf.size() > 4 && buf[buf.size() - 1] == '\n' && buf[0] == '+') {
+            // Parse the response to get the primary's IP:Port.
+            for (int i = 4; i < buf.size(); i++) {
+                if (buf[i] == '\r') {
+                    break;
+                } else {
+                    primary += buf[i];
+                }
+            }
+
+            buf.clear();
+            tempBuf.clear();
+            break;
+        } else {
+            // Clear tempBuf and try again.
+            tempBuf.clear();
+        }
+    }
+
+    return primary;
+}
+
+bool writeToPrimary(std::string primary, std::string action, std::string row, std::string column, std::string* data) {
+    // std::string primary = ipPorts[primaryIndex];
+    int openFD;
+    int numRead;
+    int status;
+    bool err = false;
+    struct sockaddr_in address;
+    std::vector<char> buf;  // Buffer to store server response.
+    std::vector<char> tempBuf(20000);  // Stores reads and transfers values to buf.
+    std::string command = "";
+
+    if (action == "PUT") {
+        command = "PWRT:" + action + ':' + row + ':' + column + "\r\n";
+    } else {
+        command = "PDEL:" + row + ':' + column + "\r\n";
+    }
+
+    if ((openFD = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+        fprintf(stderr, "Error opening socket in primary write\n");
+    }
+
+    // Parse primary's data.
+    bool indexTracker = false;
+    std::string ipAddr = "";
+    std::string rawPort = "";
+    int primaryPort;
+    for (int i = 0; i < primary.length(); i++) {
+        if (primary[i] == ':') {
+            indexTracker = true;
+        } else if (indexTracker == false) {
+            // Get IP.
+            ipAddr += primary[i];
+        } else {
+            rawPort += primary[i];
+        }
+    }
+
+    primaryPort = std::stoi(rawPort);
+    address.sin_family = AF_INET;
+    address.sin_port = htons(primaryPort);
+
+    if (inet_pton(AF_INET, ipAddr.data(), &address.sin_addr) <= 0) {
+        fprintf(stderr, "Invalid address in primary write\n");
+    }
+
+    if ((status = connect(openFD, (struct sockaddr*)&address, sizeof(address))) < 0) {
+        fprintf(stderr, "Unable to connect in primary write\n");
+    }
+
+    // Get welcome message from server.
+    while (true) {
+        numRead = read(openFD, tempBuf.data(), 2000);
+
+        if (numRead <= 0) {
+            fprintf(stderr, "Server disconnected or error occurred in primary write\n");
+        }
+
+        // Transfer read data to buf.
+        for (int i = 0; i < numRead; i++) {
+            buf.push_back(tempBuf[i]);
+        }
+
+        // Check if full message was acquired.
+        if (buf.size() == 18 && buf[0] == '+') {
+            buf.clear();
+            tempBuf.clear();
+            break;
+        } else {
+            // Clear tempBuf and try again.
+            tempBuf.clear();
+        }
+    }
+
+    // Send command to server.
+    write(openFD, &command[0], command.length());
+
+    // Get response from server.
+    while (true) {
+        numRead = read(openFD, tempBuf.data(), 2000);
+
+        if (numRead <= 0) {
+            fprintf(stderr, "Server disconnected or error occurred in primary write\n");
+        }
+
+        // Transfer read data to buf.
+        for (int i = 0; i < numRead; i++) {
+            buf.push_back(tempBuf[i]);
+        }
+
+        // Check if full message was acquired.
+        if (action == "PUT" && buf.size() == 26 && buf[0] == '+') {
+            buf.clear();
+            tempBuf.clear();
+            break;
+        } else if (action == "DELE" && buf.size() == 19 && buf[0] == '+') {
+            buf.clear();
+            tempBuf.clear();
+            break;
+        } else if (action == "DELE" && buf.size() == 27 && buf[0] == '-') {
+            buf.clear();
+            tempBuf.clear();
+            err = true;
+            break;
+        } else {
+            // Clear tempBuf and try again.
+            tempBuf.clear();
+        }
+    }
+
+    if (action == "PUT") {
+        // Send data to server.
+        command = "DATA\r\n";
+        write(openFD, &command[0], command.length());
+
+        // Get response from server.
+        while (true) {
+            numRead = read(openFD, tempBuf.data(), 2000);
+
+            if (numRead <= 0) {
+                fprintf(stderr, "Server disconnected or error occurred in primary write\n");
+            }
+
+            // Transfer read data to buf.
+            for (int i = 0; i < numRead; i++) {
+                buf.push_back(tempBuf[i]);
+            }
+
+            // Check if full message was acquired.
+            if (buf.size() == 43 && buf[0] == '+') {
+                buf.clear();
+                tempBuf.clear();
+                break;
+            } else {
+                // Clear tempBuf and try again.
+                tempBuf.clear();
+            }
+        }
+
+        write(openFD, data->data(), data->length());
+        command = "\r\n.\r\n";
+        write(openFD, &command[0], command.length());
+
+        // Get response from server.
+        while (true) {
+            numRead = read(openFD, tempBuf.data(), 2000);
+
+            if (numRead <= 0) {
+                fprintf(stderr, "Server disconnected or error occurred in primary write\n");
+            }
+
+
+            // Transfer read data to buf.
+            for (int i = 0; i < numRead; i++) {
+                buf.push_back(tempBuf[i]);
+            }
+
+            // Check if full message was acquired.
+            if (buf.size() == 17 && buf[0] == '+') {
+                buf.clear();
+                tempBuf.clear();
+                break;
+            } else {
+                // Clear tempBuf and try again.
+                tempBuf.size();
+            }
+        }
+
+        command = "QUIT\r\n";
+        write(openFD, &command[0], command.length());
+
+        // Get response and close connection.
+        while (true) {
+            numRead = read(openFD, tempBuf.data(), 2000);
+
+            if (numRead <= 0) {
+                fprintf(stderr, "Server disconnected or error occurred in primary write\n");
+            }
+
+            // Transfer read data to buf.
+            for (int i = 0; i < numRead; i++) {
+                buf.push_back(tempBuf[i]);
+            }
+
+            // Check if full message was acquired.
+            if (buf.size() == 14 && buf[0] == '+') {
+                buf.clear();
+                tempBuf.clear();
+                break;
+            } else {
+                // Clear tempBuf and try again.
+                tempBuf.clear();
+            }
+        }
+    } else {
+        command = "QUIT\r\n";
+        write(openFD, &command[0], command.length());
+
+        // Get response and close connection.
+        while (true) {
+            numRead = read(openFD, tempBuf.data(), 2000);
+
+            if (numRead <= 0) {
+                fprintf(stderr, "Server disconnected or error occurred in primary write\n");
+            }
+
+            // Transfer read data to buf.
+            for (int i = 0; i < numRead; i++) {
+                buf.push_back(tempBuf[i]);
+            }
+
+            // Check if full message was acquired.
+            if (buf.size() == 14 && buf[0] == '+') {
+                buf.clear();
+                tempBuf.clear();
+                break;
+            } else {
+                // Clear tempBuf and try again.
+                tempBuf.clear();
+            }
+        }
+    }
+
+    return false;
+}
+
+void writeToGroup(std::string activeNodes, std::string action, std::string row, std::string column, std::string* data) {
+    std::string firstNode = "";
+    std::string secondNode = "";
+    std::string thirdNode = "";
+    std::string firstIP = "", secondIP = "", thirdIP = "";
+    std::string firstPort = "", secondPort = "", thirdPort = "";
+    std::vector<int> nodePorts;
+    int primaryIndex = 0;
+    int indexTracker = 0;
+    int ipTracker = 0;
+    int nodeCount = 0;
+
+    // Parse active node IPs and ports.
+    for (int i = 0; i < activeNodes.length(); i++) {
+        if (activeNodes[i] == ':') {
+            ipTracker++;
+        }
+
+        if (activeNodes[i] == ',') {
+            indexTracker++;
+        } else if (indexTracker == 0) {
+            if (ipTracker == 0) {
+                firstIP += activeNodes[i];
+            } else if (activeNodes[i] != ':') {
+                firstPort += activeNodes[i];
+            }
+
+            firstNode += activeNodes[i];
+        } else if (indexTracker == 1) {
+            if (ipTracker == 1) {
+                secondIP += activeNodes[i];
+            } else if (activeNodes[i] != ':') {
+                secondPort += activeNodes[i];
+            }
+
+            secondNode += activeNodes[i];
+        } else {
+            if (ipTracker == 2) {
+                thirdIP += activeNodes[i];
+            } else if (activeNodes[i] != ':') {
+                thirdPort += activeNodes[i];
+            }
+
+            thirdNode += activeNodes[i];
+        }
+    }
+
+    // Determine node count.
+    if (thirdIP.length() > 0) {
+        nodeCount = 3;
+    } else if (secondIP.length() > 0) {
+        nodeCount = 2;
+    } else {
+        nodeCount = 1;
+    }
+
+    // Primary is the only active node. Write unnecessary.
+    if (nodeCount == 1) {
+        return;
+    }
+
+    // Convert ports to integers.
+    if (firstPort != "") {
+        nodePorts.push_back(std::stoi(firstPort));
+    }
+    if (secondPort != "") {
+        nodePorts.push_back(std::stoi(secondPort));
+    }
+    if (thirdPort != "") {
+        nodePorts.push_back(std::stoi(thirdPort));
+    }
+
+    // Determine which node is the primary.
+    if (firstNode == ipPorts[myIndex]) {
+        primaryIndex = 0;
+    } else if (secondNode == ipPorts[myIndex]) {
+        primaryIndex = 1;
+    } else if (thirdNode == ipPorts[myIndex]) {
+        primaryIndex = 2;
+    }
+
+    for (int i = 0; i < nodePorts.size(); i++) {
+        if (i == primaryIndex) {
+            continue;
+        }
+
+        // Open a connection and write to each node that is not the primary.
+        int openFD;
+        int numRead;
+        int status;
+        int currentPort;
+        std::string currentIP;
+        int nodesContacted = 0;
+        struct sockaddr_in address;
+        std::vector<char> buf;  // Buffer to store server response.
+        std::vector<char> tempBuf(20000);  // Stores reads and transfers values to buf.
+        std::string command = "WRIT:" + action + ':' + row + ':' + column + ':' + std::to_string(sequenceNumber) + "\r\n";
+
+        if (action == "PUT") {
+            command = "WRIT:" + action + ':' + row + ':' + column + ':' + std::to_string(sequenceNumber) + "\r\n";
+        } else {
+            command = "REMV:" + row + ':' + column + ':' + std::to_string(sequenceNumber) + "\r\n";
+        }
+
+        // Get IP and port for this node.
+        currentPort = nodePorts[i];
+        if (i == 0) {
+            currentIP = firstIP;
+        } else if (i == 1) {
+            currentIP = secondIP;
+        } else {
+            currentIP = thirdIP;
+        }
+
+        if ((openFD = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+            fprintf(stderr, "Error opening socket in write to group\n");
+        }
+
+        address.sin_family = AF_INET;
+        address.sin_port = htons(currentPort);
+
+        if (inet_pton(AF_INET, currentIP.data(), &address.sin_addr) <= 0) {
+            fprintf(stderr, "Invalid address in write to group\n");
+        }
+
+        if ((status = connect(openFD, (struct sockaddr*)&address, sizeof(address))) < 0) {
+            fprintf(stderr, "Unable to connect in write to group\n");
+        }
+
+        // Get welcome message from server.
+        while (true) {
+            numRead = read(openFD, tempBuf.data(), 2000);
+
+            if (numRead <= 0) {
+                fprintf(stderr, "Server disconnected or error occurred in write to group\n");
+            }
+
+            // Transfer read data to buf.
+            for (int i = 0; i < numRead; i++) {
+                buf.push_back(tempBuf[i]);
+            }
+
+            // Check if full message was acquired.
+            if (buf.size() == 18 && buf[0] == '+') {
+                buf.clear();
+                tempBuf.clear();
+                break;
+            } else {
+                // Clear tempBuf and try again.
+                tempBuf.clear();
+            }
+        }
+
+        // Send command to server.
+        write(openFD, &command[0], command.length());
+
+        // Get response from server.
+        while (true) {
+            numRead = read(openFD, tempBuf.data(), 2000);
+
+            if (numRead <= 0) {
+                fprintf(stderr, "Server disconnected or error occurred in write to group\n");
+            }
+
+            // Transfer read data to buf.
+            for (int i = 0; i < numRead; i++) {
+                buf.push_back(tempBuf[i]);
+            }
+
+            // Check if full message was acquired.
+            if (action == "PUT" && buf.size() == 26 && buf[0] == '+') {
+                // Full message acquired. Clear buffers.
+                buf.clear();
+                tempBuf.clear();
+                break;
+            } else if (action == "DELE" && buf.size() == 19 && buf[0] == '+') {
+                // Full message acquired. Clear buffers.
+                buf.clear();
+                tempBuf.clear();
+                break;
+            } else {
+                // Clear tempBuf and try again.
+                tempBuf.clear();
+            }
+        }
+
+        if (action == "PUT") {
+            // Send data to server.
+            command = "DATA\r\n";
+            write(openFD, &command[0], command.length());
+
+            // Get response from server.
+            while (true) {
+                numRead = read(openFD, tempBuf.data(), 2000);
+
+                if (numRead <= 0) {
+                    fprintf(stderr, "Server disconnected or error occurred in write to group\n");
+                }
+
+                // Transfer read data to buf.
+                for (int i = 0; i < numRead; i++) {
+                    buf.push_back(tempBuf[i]);
+                }
+
+                // Check if full message was acquired.
+                if (buf.size() == 43 && buf[0] == '+') {
+                    buf.clear();
+                    tempBuf.clear();
+                    break;
+                } else {
+                    // Clear tempBuf and try again.
+                    tempBuf.clear();
+                }
+            }
+
+            write(openFD, data->data(), data->length());
+            command = "\r\n.\r\n";
+            write(openFD, &command[0], command.length());
+
+            // Get response from server.
+            while (true) {
+                numRead = read(openFD, tempBuf.data(), 2000);
+
+                if (numRead <= 0) {
+                    fprintf(stderr, "Server disconnected or error occurred in write to group\n");
+                }
+
+                // Transfer read data to buf.
+                for (int i = 0; i < numRead; i++) {
+                    buf.push_back(tempBuf[i]);
+                }
+
+                // Check if full message was acquired.
+                if (buf.size() == 17 && buf[0] == '+') {
+                    buf.clear();
+                    tempBuf.clear();
+                    break;
+                } else {
+                    // Clear tempBuf and try again.
+                    tempBuf.clear();
+                }
+            }
+
+            command = "QUIT\r\n";
+            write(openFD, &command[0], command.length());
+
+            // Get response and close connection.
+            while (true) {
+                numRead = read(openFD, tempBuf.data(), 2000);
+
+                if (numRead <= 0) {
+                    fprintf(stderr, "Server disconnected or error occurred in write to group\n");
+                }
+
+                // Transfer read data to buf.
+                for (int i = 0; i < numRead; i++) {
+                    buf.push_back(tempBuf[i]);
+                }
+
+                // Check if full message was acquired.
+                if (buf.size() == 14 && buf[0] == '+') {
+                    buf.clear();
+                    tempBuf.clear();
+                    break;
+                } else {
+                    // Clear tempBuf and try again.
+                    tempBuf.clear();
+                }
+            }
+        }  else {
+            command = "QUIT\r\n";
+            write(openFD, &command[0], command.length());
+
+            // Get response and close connection.
+            while (true) {
+                numRead = read(openFD, tempBuf.data(), 2000);
+
+                if (numRead <= 0) {
+                    fprintf(stderr, "Server disconnected or error occurred in write to group\n");
+                }
+
+                // Transfer read data to buf.
+                for (int i = 0; i < numRead; i++) {
+                    buf.push_back(tempBuf[i]);
+                }
+
+                // Check if full message was acquired.
+                if (buf.size() == 14 && buf[0] == '+') {
+                    buf.clear();
+                    tempBuf.clear();
+                    break;
+                } else {
+                    // Clear tempBuf and try again.
+                    tempBuf.clear();
+                }
+            }
+        }
+    }
 }
