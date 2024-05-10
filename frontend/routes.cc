@@ -769,7 +769,6 @@ std::string delete_kvs(std::string ip, int port, std::string row, std::string co
 // FRONTEND GET ROUTES
 std::tuple<std::string, std::string, std::string> get_index(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers)
 {
-  // TODO: Add check for if logged out
   // Read in HTML file
   std::ifstream file(STATICS_LOC + "index.html");
   std::string message_body;
@@ -819,7 +818,6 @@ std::tuple<std::string, std::string, std::string> get_index(ReqInitLine *req_ini
 
 std::tuple<std::string, std::string, std::string> get_signup(ReqInitLine *req_init_line)
 {
-  // TODO: Add check for if logged out
   // Read in HTML file
   std::ifstream file(STATICS_LOC + "signup.html");
   std::string message_body;
@@ -1189,7 +1187,6 @@ std::tuple<std::string, std::string, std::string> get_inbox_message(ReqInitLine 
 
 std::tuple<std::string, std::string, std::string> get_change_password(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers)
 {
-  // TODO: Add check for if logged out
   // Read in HTML file
   std::ifstream file(STATICS_LOC + "changepass.html");
   std::string message_body;
@@ -1299,7 +1296,7 @@ std::unordered_map<std::string, std::string> parse_post_body_url_encoded(std::st
   std::unordered_map<std::string, std::string> post_body_map;
   std::istringstream ss(body);
   std::string element;
-  while (std::getline(ss, element, '&')) // TODO: This might be an issue an email or file contains a & character
+  while (std::getline(ss, element, '&'))
   {
     post_body_map[element.substr(0, element.find("="))] = element.substr(element.find("=") + 1);
   }
@@ -1416,8 +1413,6 @@ std::tuple<std::string, std::string, std::string> post_signup(ReqInitLine *req_i
     return std::make_tuple(init_response, headers, message_body);
   }
 
-  // TODO: handle error
-
   backend_address_port = get_backend_address("email_" + username);
   if (backend_address_port.substr(0, 5) == "--ERR") {
     // server group is down! return 503 error 
@@ -1457,7 +1452,6 @@ std::tuple<std::string, std::string, std::string> post_signup(ReqInitLine *req_i
   // create file metadata file, and set home directory / to uuid 1
   command = put_kvs(backend_address, backend_port, "file_" + username, "metadata.txt", "/:1\n", false, "");
 
-  // TODO: atomicity? these can get out of sync
   if (command.substr(0, 5) == "--ERR") {
     // error occurred when putting-- return ERR
     std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
@@ -1752,7 +1746,6 @@ std::tuple<std::string, std::string, std::string> post_delete_message(ReqInitLin
     if (metadata.length() <= 5 || metadata.length() > 5 && metadata.substr(0, 5) != "--ERR")
     {
       std::string new_metadata = metadata.substr(0, metadata.find(message_id) - 1) + metadata.substr(metadata.find(message_id) + message_id.length());
-      // TODO: make this a while loop
       put_metadata_response = put_kvs(backend_address, backend_port, "email_" + username, "metadata.txt", new_metadata, true, metadata);
       std::cerr << "Put metadata response: " << put_metadata_response << std::endl;
     }
@@ -1833,7 +1826,6 @@ std::tuple<std::string, std::string, std::string> post_change_password(ReqInitLi
     std::string old_password = get_kvs(backend_address, backend_port, "user_" + username, "password.txt");
     if (old_password.length() <= 5 || old_password.length() > 5 && old_password.substr(0, 5) != "--ERR")
     {
-      // TODO: make this a while loop/add error handling here
       put_metadata_response = put_kvs(backend_address, backend_port, "user_" + username, "password.txt", password, true, old_password);
     }
   }
@@ -1993,6 +1985,41 @@ std::tuple<std::string, std::string, std::string> post_restart_server(ReqInitLin
   close(sock);
   return std::make_tuple(init_response, headers, message_body);
 }
+
+std::tuple<std::string, std::string, std::string> get_kvs_data(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body) {
+  std::unordered_map<std::string, std::string> body_map = parse_post_body_url_encoded(body);
+  std::string row_key = body_map["rowkey"];
+  std::string column_key = body_map["columnkey"];
+  // query master for backend server 
+  std::string backend_address_port = get_backend_address(row_key);
+  if (backend_address_port.substr(0, 5) == "--ERR") {
+    // server group is down! return 503 error 
+    std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
+    std::string message_body = "Servers are down. Please try again later."; 
+    std::string headers = "";
+    headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
+    return std::make_tuple(init_response, headers, message_body);
+  }
+  std::string backend_address = backend_address_port.substr(0, backend_address_port.find(":"));
+  int backend_port = std::stoi(backend_address_port.substr(backend_address_port.find(":") + 1));
+
+  std::string response =  get_kvs(backend_address, backend_port, row_key, column_key);
+  if (response.substr(0, 5) == "--ERR") {
+    // failed to connect to backend! return an error
+    std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
+    std::string message_body = "An error occurred. Please try again later."; 
+    std::string headers = "";
+    headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
+    return std::make_tuple(init_response, headers, message_body);
+  }
+
+
+  std::string init_response = req_init_line->version + " 200 OK\r\n";
+  std::string headers = "Content-Type: text/html\r\n";
+  headers += "Content-Length: " + std::to_string(response.length()) + "\r\n";
+  return std::make_tuple(init_response, headers, response);
+}
+
 
 // File system functions
 // Get
@@ -2202,7 +2229,6 @@ std::tuple<std::string, std::string, std::string> get_storage(ReqInitLine *req_i
   return std::make_tuple(init_response, headers, message_body);
 }
 
-// TODO: Gets file with file_id /file/:message_id
 std::tuple<std::string, std::string, std::string> get_file(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers)
 {
   // Check if user is logged in (auth_token=sid)
@@ -2382,7 +2408,6 @@ std::tuple<std::string, std::string, std::string> post_file(ReqInitLine *req_ini
   std::string prefolder = folder_data.substr(0, curr_ind);
   std::string postfolder = folder_data.substr(curr_ind);
   std::string new_folder_data = prefolder + file_name + "\n" + postfolder;
-  // TODO: make this a while loop 
   std::string command = put_kvs(backend_address, backend_port, "file_" + username, uuid, new_folder_data, true, folder_data);
 
   // now, access next_uuid to get a uuid for this new file
@@ -2411,7 +2436,6 @@ std::tuple<std::string, std::string, std::string> post_file(ReqInitLine *req_ini
 
   // now, edit metadata file to contain mapping of file path to this uuid
   std::string new_metadata = metadata + new_file_name + ":" + std::to_string(new_uuid) + "\n";
-  // TODO: make this a while loop
   command = put_kvs(backend_address, backend_port, "file_" + username, "metadata.txt", new_metadata, true, metadata);
 
   // create the new file
@@ -2567,7 +2591,6 @@ std::tuple<std::string, std::string, std::string> download_file(ReqInitLine *req
   return std::make_tuple(init_response, headers, message_body);
 }
 
-// TODO: add handling for when someone tries to delete "/" folder or smth
 std::tuple<std::string, std::string, std::string> post_folder(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body)
 {
   // Check if user is logged in (auth_token=sid)
@@ -2654,7 +2677,6 @@ std::tuple<std::string, std::string, std::string> post_folder(ReqInitLine *req_i
 
   // update folder_data string to include new file in children folders
   std::string new_folder_data = folder_data + folder_name + "\n";
-  // TODO: make this a while loop
   std::string command = put_kvs(backend_address, backend_port, "file_" + username, uuid, new_folder_data, true, folder_data);
 
   // now, access next_uuid to get a uuid for this new folder
@@ -2683,7 +2705,6 @@ std::tuple<std::string, std::string, std::string> post_folder(ReqInitLine *req_i
 
   // now, edit metadata file to contain mapping of file path to this uuid
   std::string new_metadata = metadata + new_folder_name + ":" + std::to_string(new_uuid) + "\n";
-  // TODO: make this a while loop
   command = put_kvs(backend_address, backend_port, "file_" + username, "metadata.txt", new_metadata, true, metadata);
 
   // finally, create the new file
@@ -2761,7 +2782,6 @@ std::tuple<std::string, std::string, std::string> delete_file(ReqInitLine *req_i
   std::string new_meta = pre_meta + post_meta.substr(del_ind + 1);
 
   // write new metadata file
-  // TODO: make this a while loop
   std::string command = put_kvs(backend_address, backend_port, "file_" + username, "metadata.txt", new_meta, true, metadata);
   metadata = new_meta;
   fprintf(stderr, "post metadata\n");
@@ -2808,7 +2828,6 @@ std::tuple<std::string, std::string, std::string> delete_file(ReqInitLine *req_i
   std::string new_parent_data = parent_data.substr(0, to_delete + 1) + parent_data.substr(to_delete + file_name.length() + 2);
 
   // write new parent file
-  // TODO: make this a while loop
   command = put_kvs(backend_address, backend_port, "file_" + username, parent_uuid, new_parent_data, true, parent_data);
 
   // delete uuid file
@@ -2839,7 +2858,6 @@ std::tuple<std::string, std::string, std::string> delete_file(ReqInitLine *req_i
     new_meta = pre_meta + post_meta.substr(del_ind + 1);
 
     // write new metadata file
-    // TODO: make this a while loop
     command = put_kvs(backend_address, backend_port, "file_" + username, "metadata.txt", new_meta, true, metadata);
     metadata = new_meta;
 
@@ -2955,7 +2973,6 @@ std::tuple<std::string, std::string, std::string> rename_file(ReqInitLine *req_i
   std::string new_meta = pre_meta + new_path + post_meta.substr(del_ind);
 
   // write new metadata file
-  // TODO: make this a while loop
   std::string command = put_kvs(backend_address, backend_port, "file_" + username, "metadata.txt", new_meta, true, metadata);
   metadata = new_meta;
   fprintf(stderr, "post metadata\n");
@@ -2999,7 +3016,6 @@ std::tuple<std::string, std::string, std::string> rename_file(ReqInitLine *req_i
     std::string new_parent_data = parent_data.substr(0, to_delete + 1) + new_name + extension + "\n" + parent_data.substr(to_delete + file_name.length() + 2);
 
     // write new parent file
-    // TODO: make this a while loop
     command = put_kvs(backend_address, backend_port, "file_" + username, parent_uuid, new_parent_data, true, parent_data);
   }
 
@@ -3011,7 +3027,6 @@ std::tuple<std::string, std::string, std::string> rename_file(ReqInitLine *req_i
     new_meta.replace(next_ind, file_path.length() + 1, "\n" + new_path);
 
     // write new metadata file
-    // TODO: make this a while loop
     command = put_kvs(backend_address, backend_port, "file_" + username, "metadata.txt", new_meta, true, metadata);
     metadata = new_meta;
 
@@ -3141,7 +3156,6 @@ std::tuple<std::string, std::string, std::string> move_file(ReqInitLine *req_ini
     std::string new_meta = pre_meta + new_path + post_meta.substr(del_ind);
 
     // write new metadata file
-    // TODO: make this a while loop
     std::string command = put_kvs(backend_address, backend_port, "file_" + username, "metadata.txt", new_meta, true, metadata);
     metadata = new_meta;
 
@@ -3214,7 +3228,6 @@ std::tuple<std::string, std::string, std::string> move_file(ReqInitLine *req_ini
     std::string new_parent_data = parent_data.substr(0, to_delete + 1) + parent_data.substr(to_delete + file_name.length() + 2);
 
     // write new parent data
-    // TODO: make this a while loop
     command = put_kvs(backend_address, backend_port, "file_" + username, parent_uuid, new_parent_data, true, parent_data);
 
     // open the data for the new parent uuid
@@ -3263,7 +3276,6 @@ std::tuple<std::string, std::string, std::string> move_file(ReqInitLine *req_ini
 
       // write new metadata file
       command = put_kvs(backend_address, backend_port, "file_" + username, "metadata.txt", new_meta, true, metadata);
-      // TODO: make this a while loop
       metadata = new_meta;
 
       next_ind = metadata.find("\n" + file_path + "/");
