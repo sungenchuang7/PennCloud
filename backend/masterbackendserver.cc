@@ -857,11 +857,18 @@ void *heartbeat_thread_func(void *arg)
         {
             if (is_alive)
             {
-                std::cerr << "(heartbeat) " << server_key << " is alive!" << std::endl;
+                if (pseudo_killed_nodes.count(server_key) > 0)
+                {
+                    std::cerr << "(heartbeat) " << server_key << " is pseudo-killed!" << std::endl;
+                }
+                else
+                {
+                    std::cerr << "(heartbeat) " << server_key << " is alive!" << std::endl;
+                }
             }
             else
             {
-                std::cerr << "(heartbeat) " << server_key << " is dead!" << std::endl;
+                std::cerr << "(heartbeat) " << server_key << " is really dead!" << std::endl;
             }
         }
 
