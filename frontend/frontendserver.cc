@@ -470,6 +470,9 @@ void *connection_thread(void *args)
         {
           std::tuple<std::string, std::string, std::string> response = post_restart_server(req_init_line, headers, message_body_buf);
           send_response(fd, thread_no, std::get<0>(response), std::get<1>(response), std::get<2>(response));
+        } else if (req_init_line->path == "/get_kvs_data") {
+          std::tuple<std::string, std::string, std::string> response = get_kvs_data(req_init_line, headers, message_body_buf);
+          send_response(fd, thread_no, std::get<0>(response), std::get<1>(response), std::get<2>(response));
         }
         else
         {

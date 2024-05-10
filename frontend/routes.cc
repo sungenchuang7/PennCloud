@@ -1986,6 +1986,41 @@ std::tuple<std::string, std::string, std::string> post_restart_server(ReqInitLin
   return std::make_tuple(init_response, headers, message_body);
 }
 
+std::tuple<std::string, std::string, std::string> get_kvs_data(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body) {
+  std::unordered_map<std::string, std::string> body_map = parse_post_body_url_encoded(body);
+  std::string row_key = body_map["rowkey"];
+  std::string column_key = body_map["columnkey"];
+  // query master for backend server 
+  std::string backend_address_port = get_backend_address(row_key);
+  if (backend_address_port.substr(0, 5) == "--ERR") {
+    // server group is down! return 503 error 
+    std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
+    std::string message_body = "Servers are down. Please try again later."; 
+    std::string headers = "";
+    headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
+    return std::make_tuple(init_response, headers, message_body);
+  }
+  std::string backend_address = backend_address_port.substr(0, backend_address_port.find(":"));
+  int backend_port = std::stoi(backend_address_port.substr(backend_address_port.find(":") + 1));
+
+  std::string response =  get_kvs(backend_address, backend_port, row_key, column_key);
+  if (response.substr(0, 5) == "--ERR") {
+    // failed to connect to backend! return an error
+    std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
+    std::string message_body = "An error occurred. Please try again later."; 
+    std::string headers = "";
+    headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
+    return std::make_tuple(init_response, headers, message_body);
+  }
+
+
+  std::string init_response = req_init_line->version + " 200 OK\r\n";
+  std::string headers = "Content-Type: text/html\r\n";
+  headers += "Content-Length: " + std::to_string(response.length()) + "\r\n";
+  return std::make_tuple(init_response, headers, response);
+}
+
+
 // File system functions
 // Get
 std::tuple<std::string, std::string, std::string> get_storage(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers)
