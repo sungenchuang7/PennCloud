@@ -772,6 +772,8 @@ void *heartbeat_thread_func(void *arg)
             return nullptr;
         }
 
+        std::cerr << "SOCKFD:" << sockfd << std::endl;
+
         // update the valid sockfd associated with this thread's tid
         pthread_mutex_lock(&heartbeat_tid_socket_mutex);
         heartbeat_tid_socket_map[tid] = sockfd;
@@ -785,6 +787,7 @@ void *heartbeat_thread_func(void *arg)
                 perror("Errno: ");
                 std::cerr << "Unable to connect to " << server_key << std::endl;
             }
+            close(sockfd);
             continue;
         }
 
