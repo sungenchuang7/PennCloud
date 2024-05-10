@@ -110,7 +110,7 @@ void GTGP_handler(std::string command, int socket_fd);
 void RCVY_handler(std::string command, int socket_fd);
 void KILL_handler(std::string command, int socket_fd);
 void RVIV_handler(std::string command, int socket_fd);
-void QUIT_handler(int socket_fd);
+void QUIT_handler(int socket_fd, bool &quit_received);
 
 int main(int argc, char *argv[])
 {
@@ -286,8 +286,10 @@ void *frontend_thread_func(void *arg)
     }
     verbose_print_helper_server(socket_fd, welcome_message);
 
+    bool quit_received = false;
+
     //////// Start reading from the client
-    while (true)
+    while (!quit_received)
     {
         std::cout << "entering while loop here" << std::endl;
         if (shut_down_flag)
@@ -396,7 +398,8 @@ void *frontend_thread_func(void *arg)
             }
             else if (command.substr(0, 4) == "QUIT")
             {
-                QUIT_handler(socket_fd);
+                QUIT_handler(socket_fd, quit_received);
+                break;
             }
             else
             {
@@ -1185,7 +1188,7 @@ void INIT_handler(std::string command, int socket_fd)
         {
             std::cerr << "did we reach3" << std::endl;
             std::cerr << "group_primary_map.at(group_no): " << group_primary_map.at(group_no) << std::endl;
-            
+
             std::vector<std::string> &tablet_servers_list = tablet_storage_map.at(group_no);
             std::string server_ID = tablet_servers_list.front();
             while (!server_status_map.at(server_ID)) // if this server is dead
@@ -1393,10 +1396,10 @@ void RVIV_handler(std::string command, int socket_fd)
     }
 }
 
-void QUIT_handler(int socket_fd)
+void QUIT_handler(int socket_fd, bool &quit_received)
 {
     std::string response = "+OK Goodbye!\r\n";
     write_helper(socket_fd, response);
     verbose_print_helper_server(socket_fd, response);
+    quit_received = true; 
 }
-
