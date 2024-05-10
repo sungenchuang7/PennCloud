@@ -28,6 +28,7 @@ volatile pthread_t hb_thread;
 volatile bool shutting_down = false;
 int listenfd;
 int MAX_BUFF = 1000;
+int lbfd;
 
 struct ConnectionInfo
 {
@@ -161,6 +162,9 @@ void *connection_thread(void *args)
   int fd = ((ConnectionInfo *)args)->comm_fd;
   int thread_no = ((ConnectionInfo *)args)->thread_no;
   std::string command;
+  // upon new connection, write to load balancer to let it know there's a new client 
+  std::string join_msg = "JOIN";
+  write(lbfd, join_msg.c_str(), strlen(join_msg.c_str()));
 
   // Immediately terminate if shutting down
   if (shutting_down)
@@ -178,7 +182,8 @@ void *connection_thread(void *args)
   bool reading_message_body = false;
   std::string message_body_buf = "";
 
-  ReqInitLine *req_init_line = new ReqInitLine("", "", "");
+  ReqInitLine temp = {"", "", ""};
+  ReqInitLine* req_init_line = &temp;
   std::unordered_map<std::string, std::string> headers;
 
   while (!sig_int)
@@ -192,7 +197,8 @@ void *connection_thread(void *args)
     while (!has_full_command)
     {
       char c;
-      if (read(fd, &c, 1) > 0)
+      int bytes_read = read(fd, &c, 1);
+      if (bytes_read > 0)
       {
         buffer[end_index] = c;
 
@@ -209,6 +215,18 @@ void *connection_thread(void *args)
         }
 
         end_index++;
+      } else if (bytes_read == 0) {
+        if (debug_output)
+          {
+            std::cerr << "[" << thread_no << "] Connection closed by client" << std::endl;
+          }
+        std::string quit_msg = "QUIT";
+        write(lbfd, quit_msg.c_str(), strlen(quit_msg.c_str()));
+        close(fd);
+        // delete req_init_line;
+        fds[thread_no] = 0;
+        pthread_detach(client_threads[thread_no]);
+        pthread_exit(NULL);
       }
     }
 
@@ -452,6 +470,9 @@ void *connection_thread(void *args)
         {
           std::tuple<std::string, std::string, std::string> response = post_restart_server(req_init_line, headers, message_body_buf);
           send_response(fd, thread_no, std::get<0>(response), std::get<1>(response), std::get<2>(response));
+        } else if (req_init_line->path == "/get_kvs_data") {
+          std::tuple<std::string, std::string, std::string> response = get_kvs_data(req_init_line, headers, message_body_buf);
+          send_response(fd, thread_no, std::get<0>(response), std::get<1>(response), std::get<2>(response));
         }
         else
         {
@@ -536,7 +557,7 @@ int main(int argc, char *argv[])
   }
 
   // Create a socket to connect to load balancer
-  int lbfd = socket(PF_INET, SOCK_STREAM, 0);
+  lbfd = socket(PF_INET, SOCK_STREAM, 0);
   if (lbfd < 0)
   {
     std::cerr << "Cannot create socket" << std::endl;

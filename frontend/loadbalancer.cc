@@ -165,6 +165,11 @@ void *frontendThread(void *args)
       }
       write(comm_fd, response.c_str(), strlen(response.c_str()));
     }
+    else if (strncmp(read_buffer, "JOIN", 4) == 0) 
+    {
+      // new connection on client 
+      server_clients[addr]++;
+    }
     else if (strncmp(read_buffer, "QUIT", 4) == 0)
     {
       // client has quit
@@ -314,17 +319,17 @@ int main(int argc, char *argv[])
           min_clients = it->second;
           min_server = it->first;
         }
-      }
+      }      
       // redirect user to min_clients, min_server
       std::string init_response = "HTTP/1.0 301 Moved Permanently\r\nLocation: http://";
       std::string response = init_response + real_server_address[min_server] + "\r\n\r\n301 Moved Permanently";
-      write(comm_fd, response.c_str(), strlen(response.c_str()));
       if (vflag)
       {
         fprintf(stderr, "min server is: %s with %d clients. real server address is %s \n", min_server.c_str(), min_clients, real_server_address[min_server].c_str());
         fprintf(stderr, "responding with: %s\n", response.c_str());
       }
-      server_clients[min_server]++;
+      write(comm_fd, response.c_str(), strlen(response.c_str()));
+      // server_clients[min_server]++;
     }
   }
 }

@@ -60,9 +60,6 @@ void* diskUpdatesThread(void* threadInfo);
 // Loads a specified tablet into the KVS.
 void importTablet(char tablet);
 
-// Reads each tablet's record log to determine current activity count.
-void loadRecordCounts();
-
 // Requests the primary from the master for this node's replica group.
 std::string requestPrimary();
 
@@ -71,3 +68,39 @@ bool writeToPrimary(std::string primary, std::string action, std::string row, st
 
 // Sends a write request to all nodes in the replica group other than the primary.
 void writeToGroup(std::string activeNodes, std::string action, std::string row, std::string column, std::string* data);
+
+// Enables recovery mode upon receiving request from backend master server.
+void recovery();
+
+// Collects each tablet's most recently checkpointed sequence number.
+void loadRecordCounts();
+
+// Find and load the last log file in memory.
+std::vector<char> loadLogFile();
+
+// Loads the specified checkpoint file to be sent to recovering node.
+std::vector<char> loadCheckpointFile(char tablet);
+
+// Update the specified log file with the new data.
+void saveLogFile(char tablet, std::string* data);
+
+// Update the specified checkpoint file with the new data.
+void saveCheckpointFile(char tablet, std::string* data);
+
+// Syncs the sequence numbers for this node with the primary's state.
+void saveSequenceValues();
+
+// Parse the log file's data to restore the state of the tablet.
+void logFileRecovery();
+
+// Sends the recovering node its missing log file data for the specified tablet.
+void sendLogFileData(std::string node, std::vector<char>& data, char tablet);
+
+// Sends the recovering node an updated checkpoint file.
+void sendCheckpointFile(std::string node, std::vector<char>& data, char tablet);
+
+// Send recovery request to primary.
+void requestData(std::string primary, std::string updtArgument);
+
+// Notify master of recovery completion.
+void recoveryComplete();

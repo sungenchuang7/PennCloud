@@ -9,7 +9,6 @@ struct ReqInitLine
   std::string method;
   std::string path;
   std::string version;
-  ReqInitLine(std::string method, std::string uri, std::string version) : method(method), path(path), version(version) {}
 };
 
 void computeDigest(char *data, int dataLengthBytes, unsigned char *digestBuffer);
@@ -39,6 +38,7 @@ std::tuple<std::string, std::string, std::string> post_signup(ReqInitLine *req_i
 std::tuple<std::string, std::string, std::string> post_change_password(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body);
 std::tuple<std::string, std::string, std::string> post_kill_server(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body);
 std::tuple<std::string, std::string, std::string> post_restart_server(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body);
+std::tuple<std::string, std::string, std::string> get_kvs_data(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body);
 
 // inbox stuff
 // GET ROUTES

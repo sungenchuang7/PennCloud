@@ -8,6 +8,8 @@ int masterPort;  // Stores the master's port number.
 std::vector<std::string> activeNodes;  // Stores the active nodes for this replica group.
 std::string masterIP;; // Stores the master's IP address.
 std::vector<std::string> ipPorts;  // The IP:Port values for each node.
+std::string myTablets;  // The tablets that this server is responsible for.
+std::unordered_map<char, std::string> recordCounts;  // Stores the last sequence number that was checkpointed for each tablet.
 
 std::unordered_map<std::string, std::unordered_map<std::string, std::string*>> keyValueStore; // Key-value store for this node's rows and backup storage.
 int sequenceNumber = 0;  // The total number of requests processed on this node. Sequence number.
@@ -23,9 +25,14 @@ pthread_mutex_t primaryUpdateLock;  // Lock for accessing primary status and act
 pthread_mutex_t activeTabletLock;  // Lock for accessing activeTablet. Required when swapping tablets.
 std::shared_timed_mutex readWriteLock;  // Lock for extending read and write permissions for the active tablet.
 
-bool serverShutDown = false;  // Tracks Ctrl+C command from user.
 int shutDownPipe[2];  // Pipe for communicating shutdown status to threads.
+bool serverShutDown = false;  // Tracks Ctrl+C command from user.
 bool shutDownCleanup = false;  // Signals when thread resources have been cleaned up.
+bool pseudoShutDown = false;  // Shutdown request sent from frontend. Reject non-recovery requests.
+bool recoveryMode = false;  // Keeps track of node's recovery process.
+bool logOrCheckpoint = false;  // Tracks whether or not the incoming data is for a checkpoint log or checkpoint file.
+char lastLogFile = '0';  // The last log file that failed to checkpoint.
+char recoveringTablet = '0';  // The tablet currently undergoing recovery.
 
 std::string serverGreeting = "+OK Server ready\r\n";
 std::string invalidCommand = "-ERR Unknown command\r\n";
@@ -42,6 +49,9 @@ std::string valueAdded = "+OK Value added\r\n";
 std::string dataOkay = "+OK Enter value ending with <CRLF>.<CRLF>\r\n";
 std::string secondValueOkay = "+OK Enter second value with DATA\r\n";
 std::string firstValueInvalid = "-ERR Value does not equal current value\r\n";
+std::string primMessage = "+OK Primary updated\r\n";
+std::string stdnResponse = "+OK shutting down\r\n";
+std::string rsttResponse = "+OK recovering\r\n";
 
 // Main entry point for this program. See backendserver.h for function documentation.
 // @returns Exit code 0 for success, else error.
@@ -154,6 +164,15 @@ int parseArgs(int argc, char *argv[]) {
         activeNodes.push_back(ipPorts[7]);
         activeNodes.push_back(ipPorts[8]);
         activeNodes.push_back(ipPorts[9]);
+    }
+
+    // Assign range of tablets to this node. Used for recovery.
+    if (myIndex == 1 || myIndex == 2 || myIndex == 3) {
+        myTablets = "abcdefghi";
+    } else if (myIndex == 4 || myIndex == 5 || myIndex == 6) {
+        myTablets = "jklmnopqr";
+    } else if (myIndex == 7 || myIndex == 8 || myIndex == 9) {
+        myTablets = "stuvwxyz";
     }
 
     return 0;
@@ -328,6 +347,7 @@ void connectionManager() {
 void* workerThread(void* connectionInfo) {
     std::vector<char> buf;
     char targetTablet;
+    // char recoveringTablet = '0';  // The tablet currently undergoing recovery.
     int comm_FD = static_cast<threadDetails*>(connectionInfo)->connectionFD;
     int numRead = 0;  // The number of bytes returned by read().
     int numWrite = 0; // The number of bytes written by write();
@@ -336,14 +356,15 @@ void* workerThread(void* connectionInfo) {
     bool clientDisconnected = false;
     bool dataCalled = false;  // Tracks value input mode.
     bool cputSecondPass = false;  // Tracks whether or not v_1 is equal to the existing value.
-    // bool swappingTablet = false;  // Tracks when to release tablet swapping key.
     bool rwLockPickedUp = false;
     bool writeReceived = false;  // Tracks when we are processing a write from primary.
     bool pwrtReceived = false;  // Tracks when the primary is accepting data to be propogated.
+    // bool logOrCheckpoint = false;  // Tracks whether or not the incoming data is for a checkpoint log or checkpoint file.
     std::string requestedCommand = "Default";  // The client's most recently requested command.
     std::string requestedRow = "";
     std::string requestedColumn = "";
     std::string* valueData = new std::string("");  // Stores the value sent via the DATA command.
+    std::string recoveringNode = "";
 
     // Write greeting to client.
     write(comm_FD, &serverGreeting[0], serverGreeting.length());
@@ -491,6 +512,25 @@ void* workerThread(void* connectionInfo) {
                     } else {
                         fprintf(stderr, "Lock logic incorrect WRIT DATA.\n");
                     }
+                } else if (recoveryMode == true && logOrCheckpoint == false) {
+                    // Write data to log file.
+                    saveLogFile(recoveringTablet, valueData);
+                    delete valueData;
+                    valueData = new std::string("");
+
+                    if (write(comm_FD, &valueAdded[0], valueAdded.length()) < 0) {
+                        fprintf(stderr, "DATA failed to write: %s\n", strerror(errno));
+                    }
+                } else if (recoveryMode == true && logOrCheckpoint == true) {
+
+                    // Write data to checkpoint file.
+                    saveCheckpointFile(recoveringTablet, valueData);
+                    delete valueData;
+                    valueData = new std::string("");
+
+                    if (write(comm_FD, &valueAdded[0], valueAdded.length()) < 0) {
+                        fprintf(stderr, "DATA failed to write: %s\n", strerror(errno));
+                    }
                 } else {
                     // PUT or CPUT data received.
 
@@ -590,6 +630,11 @@ void* workerThread(void* connectionInfo) {
                                     (buf[3] == 't' || buf[3] == 'T') &&
                                     (buf[4] == '\r') &&
                                     (buf[5] == '\n')) {
+                                // Pseudo shutdown enabled. Reject request.
+                                if (pseudoShutDown == true && recoveryMode == false) {
+                                    break;
+                                }
+
                                 // QUIT called, break from loops.
                                 quitCalled = true;
 
@@ -608,8 +653,13 @@ void* workerThread(void* connectionInfo) {
                                     (buf[3] == 'a' || buf[3] == 'A') &&
                                     (buf[4] == '\r') &&
                                     (buf[5] == '\n')) {
+                                // Pseudo shutdown enabled. Reject request.
+                                if (pseudoShutDown == true && recoveryMode == false) {
+                                    break;
+                                }
+
                                 // DATA called, break loop and enter value parsing mode.
-                                if (requestedCommand == "PUT" || requestedCommand == "CPUT") {
+                                if (requestedCommand == "PUT" || requestedCommand == "CPUT" || recoveryMode == true || requestedCommand == "RECOVER") {
                                     // Data call accepted.
                                     dataCalled = true;
 
@@ -627,6 +677,11 @@ void* workerThread(void* connectionInfo) {
                                        (buf[1] == 'u' || buf[1] == 'U') &&
                                        (buf[2] == 't' || buf[2] == 'T') &&
                                        (buf[3] == ':')) {
+                                // Pseudo shutdown enabled. Reject request.
+                                if (pseudoShutDown == true) {
+                                    break;
+                                }
+
                                 // PUT() called. Extract the argument and test for validity.
                                 std::string putArgument = "";
                                 bool colTracker = false;
@@ -688,6 +743,11 @@ void* workerThread(void* connectionInfo) {
                                        (buf[1] == 'e' || buf[1] == 'E') &&
                                        (buf[2] == 't' || buf[2] == 'T') &&
                                        (buf[3] == ':')) {
+                                // Pseudo shutdown enabled. Reject request.
+                                if (pseudoShutDown == true) {
+                                    break;
+                                }
+
                                 // GET() called. Extract the argument and test for validity.
                                 std::string getArgument = "";
                                 bool colTracker = false;
@@ -771,6 +831,11 @@ void* workerThread(void* connectionInfo) {
                                        (buf[2] == 'u' || buf[2] == 'U') &&
                                        (buf[3] == 't' || buf[3] == 'T') &&
                                        (buf[4] == ':')) {
+                                // Pseudo shutdown enabled. Reject request.
+                                if (pseudoShutDown == true) {
+                                    break;
+                                }
+
                                 // CPUT() called. Extract the argument and test for validity.
                                 std::string cputArgument = "";
                                 bool colTracker = false;
@@ -838,6 +903,10 @@ void* workerThread(void* connectionInfo) {
                                        (buf[2] == 'l' || buf[2] == 'L') &&
                                        (buf[3] == 'e' || buf[3] == 'E') &&
                                        (buf[4] == ':')) {
+                                // Pseudo shutdown enabled. Reject request.
+                                if (pseudoShutDown == true) {
+                                    break;
+                                }
 
                                 // DELETE() called. Extract the argument and test for validity.
                                 std::string deleArgument = "";
@@ -893,8 +962,12 @@ void* workerThread(void* connectionInfo) {
                                        (buf[2] == 'r' || buf[2] == 'R') &&
                                        (buf[3] == 't' || buf[3] == 'T') &&
                                        (buf[4] == ':')) {
+                                // Pseudo shutdown enabled. Reject request.
+                                if (pseudoShutDown == true) {
+                                    break;
+                                }
+
                                 // WRITE request received from a secondary.
-                                
                                 std::string pwrtArgument = "";
                                 requestedCommand = "";
                                 requestedRow = "";
@@ -947,8 +1020,12 @@ void* workerThread(void* connectionInfo) {
                                        (buf[2] == 'e' || buf[2] == 'E') &&
                                        (buf[3] == 'l' || buf[3] == 'L') &&
                                        (buf[4] == ':')) {
-                                // DELETE request received from secondary.
+                                // Pseudo shutdown enabled. Reject request.
+                                if (pseudoShutDown == true) {
+                                    break;
+                                }
 
+                                // DELETE request received from secondary.
                                 std::string pdelArgument = "";
                                 requestedCommand = "DELE";
                                 requestedRow = "";
@@ -1037,8 +1114,12 @@ void* workerThread(void* connectionInfo) {
                                        (buf[2] == 'i' || buf[2] == 'I') &&
                                        (buf[3] == 't' || buf[3] == 'T') &&
                                        (buf[4] == ':')) {
+                                // Pseudo shutdown enabled. Reject request.
+                                if (pseudoShutDown == true) {
+                                    break;
+                                }
+                                
                                 // WRITE command received from primary.
-                                // Parse argument.
                                 std::string writArgument = "";
                                 requestedCommand = "";
                                 requestedRow = "";
@@ -1094,9 +1175,12 @@ void* workerThread(void* connectionInfo) {
                                        (buf[2] == 'm' || buf[2] == 'M') &&
                                        (buf[3] == 'v' || buf[3] == 'V') &&
                                        (buf[4] == ':')) {
-                                // DELETE command received from primary.
+                                // Pseudo shutdown enabled. Reject request.
+                                if (pseudoShutDown == true) {
+                                    break;
+                                }
 
-                                // Parse the arguments.
+                                // DELETE command received from primary.
                                 std::string remvArgument = "";
                                 requestedCommand = "";
                                 requestedRow = "";
@@ -1168,6 +1252,11 @@ void* workerThread(void* connectionInfo) {
                                        (buf[2] == 'i' || buf[2] == 'I') &&
                                        (buf[3] == 'm' || buf[3] == 'M') &&
                                        (buf[4] == ':')) {
+                                // Pseudo shutdown enabled. Reject request.
+                                if (pseudoShutDown == true) {
+                                    break;
+                                }
+
                                 // Backend server down. Update primary status and list of active storage servers.
                                 pthread_mutex_lock(&primaryUpdateLock);
                                 currentPrimary = true;
@@ -1187,8 +1276,203 @@ void* workerThread(void* connectionInfo) {
 
                                 pthread_mutex_unlock(&primaryUpdateLock);
 
-                                fprintf(stderr, "[Current Primary: %s] Storage server down. Currently active nodes: %s\n", ipPorts[myIndex].data(), primArgument.data());
+                                if (write(comm_FD, &primMessage[0], primMessage.length()) < 0) {
+                                    fprintf(stderr, "REMV failed to write: %s\n", strerror(errno));
+                                }
+
+                                fprintf(stderr, "[Current Primary: %s] Storage server statuses updated - currently active nodes: %s\n", ipPorts[myIndex].data(), primArgument.data());
+                            } else if ((buf[0] == 's' || buf[0] == 'S') && 
+                                    (buf[1] == 't' || buf[1] == 'T') && 
+                                    (buf[2] == 'd' || buf[2] == 'D') &&
+                                    (buf[3] == 'n' || buf[3] == 'N') &&
+                                    (buf[4] == '\r') &&
+                                    (buf[5] == '\n')) {
+                                // Pseudo shutdown enabled. Reject request.
+                                if (pseudoShutDown == true) {
+                                    break;
+                                }
+
+                                currentPrimary = false;
+
+                                // Deallocate KVS memory to simulate shutdown.
+                                kvsCleanup();
+
+                                std::cerr << "STDN command received. Pseudo shutdown enabled." << std::endl; 
+
+                                if (write(comm_FD, stdnResponse.c_str(), stdnResponse.length()) < 0) {
+                                    fprintf(stderr, "STDN failed to write: %s\n", strerror(errno));
+                                }
+                                pseudoShutDown = true;
+
+                                char* shutdownSignal = new char;
+                                *shutdownSignal = 'X';
+
+                                // Separate SIGINT from new output.
+                                fprintf(stderr, "\n");
+
+                                // Write the shutdown signal for threads to see.
+                                write(shutDownPipe[1], shutdownSignal, 1);
+
+                                delete shutdownSignal;
+                            } else if ((buf[0] == 'r' || buf[0] == 'R') && 
+                                    (buf[1] == 's' || buf[1] == 'S') && 
+                                    (buf[2] == 't' || buf[2] == 'T') &&
+                                    (buf[3] == 't' || buf[3] == 'T') &&
+                                    (buf[4] == '\r') &&
+                                    (buf[5] == '\n')) {                            
+                                if (pseudoShutDown == false) {
+                                    // Invalid command received.
+                                    if (write(comm_FD, &invalidSequenceOfCommands[0], invalidSequenceOfCommands.length()) < 0) {
+                                        fprintf(stderr, "RSTT failed to write: %s\n", strerror(errno));
+                                    }
+                                } else {
+                                    if (write(comm_FD, &rsttResponse[0], rsttResponse.length()) < 0) {
+                                        fprintf(stderr, "RSTT failed to write: %s\n", strerror(errno));
+                                    }
+                                    recoveryMode = true;
+                                    requestedCommand = "RECOVER";
+                                    recovery();
+                                    requestedCommand = "DEFAULT";
+                                }
+                            } else if ((buf.size() > 25) &&
+                                    (buf[0] == 'u' || buf[0] == 'U') && 
+                                    (buf[1] == 'p' || buf[1] == 'P') && 
+                                    (buf[2] == 'd' || buf[2] == 'D') &&
+                                    (buf[3] == 't' || buf[3] == 'T')) {
+                                pthread_mutex_lock(&activeTabletLock);
+                                // requestedCommand = "RECOVER";
+                                // Parse the arguments.
+                                std::string updtArgument = "";
+                                std::string nextValue = "";
+                                std::string recoveringNodeAddress = "";
+                                std::vector<std::string> updtArgs;
+                                int characterTracker = 0;
+                                updtArgument.append(buf.begin() + 5, buf.begin() + i);
+                                std::stringstream ss(updtArgument);
+                                std::unordered_map<char, std::string> receivedRecordCounts;
+
+                                while (!ss.eof()) {
+                                    std::getline(ss, nextValue, ':');
+                                    // if (nextValue[nextValue.length() - 1] == '\n') {
+                                    // nextValue = nextValue.substr(0, nextValue.length() - 1);
+                                    // }
+                                    updtArgs.push_back(nextValue);
+                                }
+
+                                recoveringNodeAddress += updtArgs[0] + ':' + updtArgs[1];
+
+                                for (int i = 2; i < updtArgs.size() - 1; i++) {
+                                    if (i % 2 == 0) {
+                                        receivedRecordCounts[updtArgs[i][0]] = updtArgs[i + 1];
+                                    }
+                                }
+
+                                // Get most recent checkpoint sequence numbers for each tablet.
+                                loadRecordCounts();
+
+                                // Get log file and determine its tablet.
+                                std::vector<char> lastLog = loadLogFile();
+                                char logTablet = '0';
+                                if (lastLog.size() > 0) {
+                                    // Log has transactions. Determine tablet.
+                                    int argCounter = 0;
+                                    for (int i = 0; i < lastLog.size(); i++) {
+                                        if (lastLog[i] == ':') {
+                                            argCounter++;
+                                        } else if (argCounter == 2) {
+                                            logTablet = lastLog[i];
+                                            break;
+                                        }
+                                    }
+                                } else {
+                                    // All logs are empty.
+                                }
+
+                                for (auto tab : recordCounts) {
+                                    if (recordCounts[tab.first] == receivedRecordCounts[tab.first]) {
+                                        // Version number of the previous tablet is the same. Send over log file for this tablet to recover missing entries.
+                                        if (logTablet != '0') {
+                                            sendLogFileData(recoveringNodeAddress, lastLog, logTablet);
+                                        }
+                                    } else if (recordCounts[tab.first] > receivedRecordCounts[tab.first]) {
+                                        // A checkpoint occurred while the recovering node was down. Send over the full tablet.
+                                        std::vector<char> currentCheckpoint = loadCheckpointFile(tab.first);
+                                        sendCheckpointFile(recoveringNodeAddress, currentCheckpoint, tab.first);
+                                    }
+                                }
+
+                                // Reply once all of the data has been sent to the recovering node.
+                                if (write(comm_FD, &okayMessage[0], okayMessage.length()) < 0) {
+                                    fprintf(stderr, "UPDT failed to write: %s\n", strerror(errno));
+                                }
+
+                                // Release locks.
+                                pthread_mutex_unlock(&activeTabletLock);
+
+                                // Reset any state values.
+                            } else if ((buf[0] == 'f' || buf[0] == 'F') && 
+                                    (buf[1] == 'i' || buf[1] == 'I') && 
+                                    (buf[2] == 'l' || buf[2] == 'L') &&
+                                    (buf[3] == 'e' || buf[3] == 'E')) {
+                                if (pseudoShutDown == false) {
+                                    // Invalid command received.
+                                    if (write(comm_FD, &invalidSequenceOfCommands[0], invalidSequenceOfCommands.length()) < 0) {
+                                        fprintf(stderr, "FILE failed to write: %s\n", strerror(errno));
+                                    }
+                                } else {
+                                    // Parse the arguments.
+                                    requestedCommand = "RECOVER";
+                                    std::string fileArgument = "";
+                                    fileArgument.append(buf.begin() + 5, buf.begin() + i);
+                                    recoveringTablet = fileArgument[0];
+                                    if (fileArgument[2] == '0') {
+                                        logOrCheckpoint = false;
+                                    } else if (fileArgument[2] == '1') {
+                                        logOrCheckpoint = true;
+                                    } else {
+                                        fprintf(stderr, "Input error in FILE.\n");
+                                    }
+
+                                    if (write(comm_FD, &putOkay[0], putOkay.length()) < 0) {
+                                        fprintf(stderr, "RSTT failed to write: %s\n", strerror(errno));
+                                    }
+                                }
+                            } else if ((buf[0] == 'p' || buf[0] == 'P') && 
+                                    (buf[1] == 'a' || buf[1] == 'A') && 
+                                    (buf[2] == 'i' || buf[2] == 'I') &&
+                                    (buf[3] == 'r' || buf[3] == 'R') &&
+                                    (buf[4] == '\r') &&
+                                    (buf[5] == '\n')) {
+                                // Return all row, column pairs in this replica group.
+                                    pthread_mutex_lock(&activeTabletLock);
+                                    readWriteLock.lock();
+                                    std::string response = "+OK ";
+
+                                    for (int i = 0; i < myTablets.size(); i++) {
+                                        importTablet(myTablets[i]);
+
+                                        for (auto row : keyValueStore) {
+                                            for (auto col : keyValueStore[row.first]) {
+                                                response += row.first + ',' + col.first + ':';
+                                            }
+                                        }
+                                    }
+
+                                    response = response.substr(0, response.length() - 1);
+
+                                    response += "\r\n";
+
+                                    pthread_mutex_unlock(&activeTabletLock);
+                                    readWriteLock.unlock();
+                                    if (write(comm_FD, &response[0], response.length()) < 0) {
+                                        fprintf(stderr, "PAIR failed to write: %s\n", strerror(errno));
+                                    }
                             } else {
+                                // Pseudo shutdown enabled. Reject request.
+                                if (pseudoShutDown == true) {
+                                    break;
+                                }
+
                                 // Invalid command received.
                                 if (write(comm_FD, &invalidCommand[0], invalidCommand.length()) < 0) {
                                     fprintf(stderr, "Server failed to write: %s\n", strerror(errno));
@@ -1220,38 +1504,43 @@ void* workerThread(void* connectionInfo) {
             }
         }
 
+        // Server shutdown enabled.
+        if (pseudoShutDown == true && recoveryMode == false) {
+            break;
+        }
+
         continueReading = false;
     }
 
-    if (serverShutDown == false) {
-        if (clientDisconnected == false) {
-            // Quit requested. Send farewell message and close this connection.
-            write(comm_FD, &quitMessage[0], quitMessage.length());
+    if (serverShutDown == true || (pseudoShutDown == true && recoveryMode == false)) {
+       // Server shutting down. Write message to client and close connection.
+       write(comm_FD, &serverShutDownMessage[0], serverShutDownMessage.length());
 
-            // Debugger output - farewell message.
-            if (vFlag == true) {
-                fprintf(stderr, "[%d] S: %s", comm_FD, quitMessage.data());
-            }
-        }
+       // Debugger output - server shutdown enabled and connection closed.
+       if (vFlag == true) {
+           fprintf(stderr, "[%d] S: %s", comm_FD, serverShutDownMessage.c_str());
+           fprintf(stderr, "[%d] Connection closed\n", comm_FD);
+       }
 
-        // Close the connection and update active fileDescriptors.
-        close(comm_FD);
-
-        // Debugger output - connection closed.
-        if (vFlag == true) {
-            fprintf(stderr, "[%d] Connection closed\n", comm_FD);
-        }
+       close(comm_FD);
     } else {
-        // Server shutting down. Write message to client and close connection.
-        write(comm_FD, &serverShutDownMessage[0], serverShutDownMessage.length());
+       if (clientDisconnected == false) {
+           // Quit requested. Send farewell message and close this connection.
+           write(comm_FD, &quitMessage[0], quitMessage.length());
 
-        // Debugger output - server shutdown enabled and connection closed.
-        if (vFlag == true) {
-            fprintf(stderr, "[%d] S: %s", comm_FD, serverShutDownMessage.data());
-            fprintf(stderr, "[%d] Connection closed\n", comm_FD);
-        }
+           // Debugger output - farewell message.
+           if (vFlag == true) {
+               fprintf(stderr, "[%d] S: %s", comm_FD, quitMessage.c_str());
+           }
+       }
+       // Close the connection and update active fileDescriptors.
+       close(comm_FD);
 
-        close(comm_FD);
+
+       // Debugger output - connection closed.
+       if (vFlag == true) {
+           fprintf(stderr, "[%d] Connection closed\n", comm_FD);
+       }
     }
 
     // Update active thread information, clean up memory, and exit.
@@ -1296,7 +1585,6 @@ void kvsCleanup() {
 }
 
 void logActivity(int seqNum, char tablet, std::string action, std::string row, std::string column, std::string value, std::string length) {
-    // Format - Sequence Number : Total Record ID : Node ID : Action type : Row : Column : Timestamp
     std::string currentRecord = "";
     tablet = std::tolower(tablet);
 
@@ -1404,8 +1692,23 @@ void checkpointUpdate() {
 
 void* diskUpdatesThread(void* threadInfo) {
     while (true) {
+        sleep(1);
+        if (pseudoShutDown == true) {
+            // Server shut down received from admin console. Continue until recovery concludes.
+            continue;
+        }
+
         pthread_mutex_lock(&activeTabletLock);
         
+        if (serverShutDown == true) {
+            // CTRL+C requested.
+            break;
+        } else if (pseudoShutDown == true) {
+            // Server shut down received from admin console. Continue until recovery concludes.
+            pthread_mutex_unlock(&activeTabletLock);
+            continue;
+        }
+
         if (activeTablet != '0') {
             // Tablet valid. Perform checkpoint.
             if (vFlag == true) {
@@ -1425,14 +1728,20 @@ void* diskUpdatesThread(void* threadInfo) {
         if (serverShutDown == true) {
             // CTRL+C requested.
             break;
+        } else if (pseudoShutDown == true) {
+            // Server shut down received from admin console. Continue until recovery concludes.
+            continue;
         }
 
-        // Periodically wait before performing the next update.
-        sleep(10);
+        // Periodically wait before performing the next checkpoint update.
+        sleep(1);
 
         if (serverShutDown == true) {
             // CTRL+C requested.
             break;
+        } else if (pseudoShutDown == true) {
+            // Server shut down received from admin console. Continue until recovery concludes.
+            continue;
         }
     }
 
@@ -1596,10 +1905,6 @@ void importTablet(char tablet) {
     activeTablet = std::tolower(tablet);
 }
 
-void loadRecordCounts() {
-
-}
-
 std::string requestPrimary() {
     std::string primary;
     int openFD;
@@ -1655,6 +1960,9 @@ std::string requestPrimary() {
     // Get primary response from server.
     while (true) {
         numRead = read(openFD, tempBuf.data(), 2000);
+        for (int i = 0; i < tempBuf.size(); i++) {
+            std::cout << tempBuf[i];
+        }
 
         if (numRead <= 0) {
             fprintf(stderr, "Server disconnected or error occurred in request primary\n");
@@ -1679,6 +1987,8 @@ std::string requestPrimary() {
             buf.clear();
             tempBuf.clear();
             break;
+        } else if (buf.size() == 29 && buf[0] == '-') {
+            primary = "";
         } else {
             // Clear tempBuf and try again.
             tempBuf.clear();
@@ -2211,4 +2521,791 @@ void writeToGroup(std::string activeNodes, std::string action, std::string row, 
             }
         }
     }
+}
+
+void recovery() {
+    // Get address of primary from master.
+    std::string activePrimary = requestPrimary();
+
+    if (activePrimary.length() > 0) {
+        // Get the most recently checkpointed sequence numbers for each tablet.
+        std::string argument = ipPorts[myIndex];
+
+        // Get most recently checkpointed sequence numbers.
+        loadRecordCounts();
+
+        for (auto tab : recordCounts) {
+            argument = argument + ':' + tab.first + ':' + recordCounts[tab.first];
+        }
+
+        // Load the most recent log that was not checkpointed.
+        std::vector<char> mostRecentLog = loadLogFile();
+        
+        // Send recovery request to primary.
+        requestData(activePrimary, argument);
+    } else {
+
+    }
+    
+    // Notify master.
+    recoveryComplete();
+
+    // Reset state.
+    lastLogFile = '0';
+    recoveryMode = false;
+    recordCounts.clear();
+    pseudoShutDown = false;
+    logOrCheckpoint = false;
+    recoveringTablet = '0';
+}
+
+void loadRecordCounts() {
+    std::vector<char> buf;
+    char myDirectory[PATH_MAX];
+    bool endOfFile = false;
+    int currentFD;
+    int numRead = 0;
+    getcwd(myDirectory, sizeof(myDirectory));
+
+    for (int i = 0; i < myTablets.length(); i++) {
+        // Open tablet sequence number.
+        std::string directory(myDirectory);
+        directory = directory + '/' + "storage_node_" + std::to_string(myIndex) + "/activity_logs/" + "sequence_number_" + myTablets[i];
+        currentFD = open(directory.data(), O_RDWR | S_IRUSR | S_IWUSR);
+
+        while (currentFD != -1 && endOfFile == false) {
+            std::vector<char> tempBuf(20000);  // Temporary buffer for reading data.
+
+            // Server shutdown enabled.
+            if (serverShutDown == true) {
+                break;
+            }
+
+            // Read in the data and store it in the temp buffer.
+            numRead = read(currentFD, tempBuf.data(), 2000);
+
+            if (numRead == 0) {
+                // End of file reached.
+                endOfFile = true;
+            }
+
+            // Copy contents of temp array into full array.
+            buf.insert(buf.end(), tempBuf.begin(), tempBuf.begin() + numRead);
+
+            // No contents to parse. Exit loop.
+            if (buf.size() == 0) {
+                break;
+            }
+        }
+
+        // Add the extracted value to recordCounts.
+        if (buf.size() > 0) {
+            std::string newCount;
+            for (int k = 0; k < buf.size(); k++) {
+                if (buf[k] != '\n') {
+                    newCount.push_back(buf[k]);
+                }
+            }
+            recordCounts[myTablets[i]] = newCount;
+        } else {
+            recordCounts[myTablets[i]] = "0";
+        }
+
+        buf.clear();
+        endOfFile = false;
+        close(currentFD);
+    }
+}
+
+std::vector<char> loadLogFile() {
+    std::vector<char> buf;
+    char myDirectory[PATH_MAX];
+    bool endOfFile = false;
+    int currentFD;
+    int numRead = 0;
+    getcwd(myDirectory, sizeof(myDirectory));
+
+    for (int i = 0; i < myTablets.length(); i++) {
+        // Open tablet sequence number.
+        std::string directory(myDirectory);
+        directory = directory + '/' + "storage_node_" + std::to_string(myIndex) + "/activity_logs/" + "tablet_log_" + myTablets[i];
+        currentFD = open(directory.data(), O_RDWR | S_IRUSR | S_IWUSR);
+
+        while (currentFD != -1 && endOfFile == false) {
+            std::vector<char> tempBuf(20000);  // Temporary buffer for reading data.
+
+            // Server shutdown enabled.
+            if (serverShutDown == true) {
+                break;
+            }
+
+            // Read in the data and store it in the temp buffer.
+            numRead = read(currentFD, tempBuf.data(), 2000);
+
+            if (numRead == 0) {
+                // End of file reached.
+                endOfFile = true;
+            }
+
+            // Copy contents of temp array into full array.
+            buf.insert(buf.end(), tempBuf.begin(), tempBuf.begin() + numRead);
+
+            // No contents to parse. Exit loop.
+            if (buf.size() == 0) {
+                break;
+            }
+
+            if (endOfFile == true && buf.size() > 0) {
+                lastLogFile = myTablets[i];
+                break;
+            }
+        }
+    }
+
+    close(currentFD);
+
+    return buf;
+}
+
+std::vector<char> loadCheckpointFile(char tablet) {
+    std::vector<char> buf;
+    char myDirectory[PATH_MAX];
+    bool endOfFile = false;
+    int currentFD;
+    int numRead = 0;
+    getcwd(myDirectory, sizeof(myDirectory));
+    std::tolower(tablet);
+
+    // Open tablet sequence number.
+    std::string directory(myDirectory);
+    directory = directory + '/' + "storage_node_" + std::to_string(myIndex) + "/tablets/" + "tablet_" + tablet;
+    currentFD = open(directory.data(), O_RDWR | S_IRUSR | S_IWUSR);
+
+    while (currentFD != -1 && endOfFile == false) {
+        std::vector<char> tempBuf(20000);  // Temporary buffer for reading data.
+
+        // Server shutdown enabled.
+        if (serverShutDown == true) {
+            break;
+        }
+
+        // Read in the data and store it in the temp buffer.
+        numRead = read(currentFD, tempBuf.data(), 2000);
+
+        if (numRead == 0) {
+            // End of file reached.
+            endOfFile = true;
+        }
+
+        // Copy contents of temp array into full array.
+        buf.insert(buf.end(), tempBuf.begin(), tempBuf.begin() + numRead);
+
+        // No contents to parse. Exit loop.
+        if (buf.size() == 0) {
+            break;
+        }
+
+        if (endOfFile == true && buf.size() > 0) {
+            break;
+        }
+    }
+
+    close(currentFD);
+
+    return buf;
+}
+
+void saveLogFile(char tablet, std::string* data) {
+    char myDirectory[PATH_MAX];
+    int currentFD;
+    getcwd(myDirectory, sizeof(myDirectory));
+    std::string directory(myDirectory);
+    tablet = std::tolower(tablet);
+    
+    // Open and lock file.
+    directory = directory + '/' + "storage_node_" + std::to_string(myIndex) + "/activity_logs/" + "tablet_" + tablet;
+    currentFD = open(directory.data(), O_RDWR | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
+    flock(currentFD, LOCK_EX);
+
+    // Write the header information to disk.
+    if (write(currentFD, data->data(), data->length()) < 0) {
+        fprintf(stderr, "Failed to write log to disk in saveLogFile: %s\n", strerror(errno));
+    }
+
+    // Release lock and close file.
+    flock(currentFD, LOCK_UN);
+    close(currentFD);
+}
+
+void saveCheckpointFile(char tablet, std::string* data) {
+    char myDirectory[PATH_MAX];
+    int currentFD;
+    getcwd(myDirectory, sizeof(myDirectory));
+    std::string directory(myDirectory);
+    tablet = std::tolower(tablet);
+    
+    // Open and lock file.
+    directory = directory + '/' + "storage_node_" + std::to_string(myIndex) + "/tablets/" + "tablet_" + tablet;
+    currentFD = open(directory.data(), O_RDWR | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
+    flock(currentFD, LOCK_EX);
+
+    // Write the header information to disk.
+    if (write(currentFD, data->data(), data->length()) < 0) {
+        fprintf(stderr, "Failed to write log to disk in saveLogFile: %s\n", strerror(errno));
+    }
+
+    // Release lock and close file.
+    flock(currentFD, LOCK_UN);
+    close(currentFD);
+}
+
+void logFileRecovery() {
+
+}
+
+void sendLogFileData(std::string node, std::vector<char>& data, char tablet) {
+    // std::string primary = ipPorts[primaryIndex];
+    int openFD;
+    int numRead;
+    int status;
+    struct sockaddr_in address;
+    std::string nodeIP = "";
+    std::string nodePort = "";
+    std::vector<char> buf;  // Buffer to store server response.
+    std::vector<char> tempBuf(20000);  // Stores reads and transfers values to buf.
+    std::string command = "";
+    bool ipTracker = false;
+    tablet = std::tolower(tablet);
+    command = command + "FILE:" + tablet + ":0\r\n";
+
+    // Separate IP and port from node's address.
+    for (int i = 0; i < node.length(); i++) {
+        if (node[i] == ':') {
+            ipTracker = true;
+        } else if (ipTracker == true) {
+            nodePort += node[i];
+        } else {
+            nodeIP += node[i];
+        }
+    }
+
+    if ((openFD = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+        fprintf(stderr, "Error opening socket in sendLogFile\n");
+    }
+
+    address.sin_family = AF_INET;
+    address.sin_port = htons(std::stoi(nodePort));
+
+    if (inet_pton(AF_INET, nodeIP.data(), &address.sin_addr) <= 0) {
+        fprintf(stderr, "Invalid address in sendLogFile\n");
+    }
+
+    if ((status = connect(openFD, (struct sockaddr*)&address, sizeof(address))) < 0) {
+        fprintf(stderr, "Unable to connect in sendLogFile\n");
+    }
+
+    // Get welcome message from server.
+    while (true) {
+        numRead = read(openFD, tempBuf.data(), 2000);
+
+        if (numRead <= 0) {
+            fprintf(stderr, "Server disconnected or error occurred in sendLogFile\n");
+        }
+
+        // Transfer read data to buf.
+        for (int i = 0; i < numRead; i++) {
+            buf.push_back(tempBuf[i]);
+        }
+
+        // Check if full message was acquired.
+        if (buf.size() == 18 && buf[0] == '+') {
+            buf.clear();
+            tempBuf.clear();
+            break;
+        } else {
+            // Clear tempBuf and try again.
+            tempBuf.clear();
+        }
+    }
+
+    // Send command to server.
+    write(openFD, &command[0], command.length());
+
+    // Get response from server.
+    while (true) {
+        numRead = read(openFD, tempBuf.data(), 2000);
+
+        // Transfer read data to buf.
+        for (int i = 0; i < numRead; i++) {
+            buf.push_back(tempBuf[i]);
+        }
+
+        // Check if full message was acquired.
+        if (buf.size() == 26 && buf[0] == '+') {
+            buf.clear();
+            tempBuf.clear();
+            break;
+        } else {
+            // Clear tempBuf and try again.
+            tempBuf.clear();
+        }
+    }
+
+    // Send data to server.
+    command = "DATA\r\n";
+    write(openFD, &command[0], command.length());
+
+    // Get response from server.
+    while (true) {
+        numRead = read(openFD, tempBuf.data(), 2000);
+
+        if (numRead <= 0) {
+            fprintf(stderr, "Server disconnected or error occurred in primary write\n");
+        }
+
+        // Transfer read data to buf.
+        for (int i = 0; i < numRead; i++) {
+            buf.push_back(tempBuf[i]);
+        }
+
+        // Check if full message was acquired.
+        if (buf.size() == 43 && buf[0] == '+') {
+            buf.clear();
+            tempBuf.clear();
+            break;
+        } else {
+            // Clear tempBuf and try again.
+            tempBuf.clear();
+        }
+    }
+
+    write(openFD, data.data(), data.size());
+    command = "\r\n.\r\n";
+    write(openFD, &command[0], command.length());
+
+    // Get response from server.
+    while (true) {
+        numRead = read(openFD, tempBuf.data(), 2000);
+
+        if (numRead <= 0) {
+            fprintf(stderr, "Server disconnected or error occurred in primary write\n");
+        }
+
+        // Transfer read data to buf.
+        for (int i = 0; i < numRead; i++) {
+            buf.push_back(tempBuf[i]);
+        }
+
+        // Check if full message was acquired.
+        if (buf.size() == 17 && buf[0] == '+') {
+            buf.clear();
+            tempBuf.clear();
+            break;
+        } else {
+            // Clear tempBuf and try again.
+            tempBuf.size();
+        }
+    }
+
+    command = "QUIT\r\n";
+    write(openFD, &command[0], command.length());
+
+    // Get response and close connection.
+    while (true) {
+        numRead = read(openFD, tempBuf.data(), 2000);
+
+        if (numRead <= 0) {
+            fprintf(stderr, "Server disconnected or error occurred in primary write\n");
+        }
+
+        // Transfer read data to buf.
+        for (int i = 0; i < numRead; i++) {
+            buf.push_back(tempBuf[i]);
+        }
+
+        // Check if full message was acquired.
+        if (buf.size() == 14 && buf[0] == '+') {
+            buf.clear();
+            tempBuf.clear();
+            break;
+        } else {
+            // Clear tempBuf and try again.
+            tempBuf.clear();
+        }
+    }
+
+    close(openFD);
+}
+
+void sendCheckpointFile(std::string node, std::vector<char>& data, char tablet) {
+    // std::string primary = ipPorts[primaryIndex];
+    int openFD;
+    int numRead;
+    int status;
+    struct sockaddr_in address;
+    std::string nodeIP = "";
+    std::string nodePort = "";
+    std::vector<char> buf;  // Buffer to store server response.
+    std::vector<char> tempBuf(20000);  // Stores reads and transfers values to buf.
+    std::string command = "";
+    bool ipTracker = false;
+    tablet = std::tolower(tablet);
+    command = command + "FILE:" + tablet + ":1\r\n";
+
+    // Separate IP and port from node's address.
+    for (int i = 0; i < node.length(); i++) {
+        if (node[i] == ':') {
+            ipTracker = true;
+        } else if (ipTracker == true) {
+            nodePort += node[i];
+        } else {
+            nodeIP += node[i];
+        }
+    }
+
+    if ((openFD = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+        fprintf(stderr, "Error opening socket in sendLogFile\n");
+    }
+
+    address.sin_family = AF_INET;
+    address.sin_port = htons(std::stoi(nodePort));
+
+    if (inet_pton(AF_INET, nodeIP.data(), &address.sin_addr) <= 0) {
+        fprintf(stderr, "Invalid address in sendLogFile\n");
+    }
+
+    if ((status = connect(openFD, (struct sockaddr*)&address, sizeof(address))) < 0) {
+        fprintf(stderr, "Unable to connect in sendLogFile\n");
+    }
+
+    // Get welcome message from server.
+    while (true) {
+        numRead = read(openFD, tempBuf.data(), 2000);
+
+        if (numRead <= 0) {
+            fprintf(stderr, "Server disconnected or error occurred in sendLogFile\n");
+        }
+
+        // Transfer read data to buf.
+        for (int i = 0; i < numRead; i++) {
+            buf.push_back(tempBuf[i]);
+        }
+
+        // Check if full message was acquired.
+        if (buf.size() == 18 && buf[0] == '+') {
+            buf.clear();
+            tempBuf.clear();
+            break;
+        } else {
+            // Clear tempBuf and try again.
+            tempBuf.clear();
+        }
+    }
+
+    // Send command to server.
+    write(openFD, &command[0], command.length());
+
+    // Get response from server.
+    while (true) {
+        numRead = read(openFD, tempBuf.data(), 2000);
+
+        // Transfer read data to buf.
+        for (int i = 0; i < numRead; i++) {
+            buf.push_back(tempBuf[i]);
+        }
+
+        // Check if full message was acquired.
+        if (buf.size() == 26 && buf[0] == '+') {
+            buf.clear();
+            tempBuf.clear();
+            break;
+        } else {
+            // Clear tempBuf and try again.
+            tempBuf.clear();
+        }
+    }
+
+    // Send data to server.
+    command = "DATA\r\n";
+    write(openFD, &command[0], command.length());
+
+    // Get response from server.
+    while (true) {
+        numRead = read(openFD, tempBuf.data(), 2000);
+
+        if (numRead <= 0) {
+            fprintf(stderr, "Server disconnected or error occurred in primary write\n");
+        }
+
+        // Transfer read data to buf.
+        for (int i = 0; i < numRead; i++) {
+            buf.push_back(tempBuf[i]);
+        }
+
+        // Check if full message was acquired.
+        if (buf.size() == 43 && buf[0] == '+') {
+            buf.clear();
+            tempBuf.clear();
+            break;
+        } else {
+            // Clear tempBuf and try again.
+            tempBuf.clear();
+        }
+    }
+
+    write(openFD, data.data(), data.size());
+    command = "\r\n.\r\n";
+    write(openFD, &command[0], command.length());
+
+    // Get response from server.
+    while (true) {
+        numRead = read(openFD, tempBuf.data(), 2000);
+
+        if (numRead <= 0) {
+            fprintf(stderr, "Server disconnected or error occurred in primary write\n");
+        }
+
+        // Transfer read data to buf.
+        for (int i = 0; i < numRead; i++) {
+            buf.push_back(tempBuf[i]);
+        }
+
+        // Check if full message was acquired.
+        if (buf.size() == 17 && buf[0] == '+') {
+            buf.clear();
+            tempBuf.clear();
+            break;
+        } else {
+            // Clear tempBuf and try again.
+            tempBuf.size();
+        }
+    }
+
+    command = "QUIT\r\n";
+    write(openFD, &command[0], command.length());
+
+    // Get response and close connection.
+    while (true) {
+        numRead = read(openFD, tempBuf.data(), 2000);
+
+        if (numRead <= 0) {
+            fprintf(stderr, "Server disconnected or error occurred in primary write\n");
+        }
+
+        // Transfer read data to buf.
+        for (int i = 0; i < numRead; i++) {
+            buf.push_back(tempBuf[i]);
+        }
+
+        // Check if full message was acquired.
+        if (buf.size() == 14 && buf[0] == '+') {
+            buf.clear();
+            tempBuf.clear();
+            break;
+        } else {
+            // Clear tempBuf and try again.
+            tempBuf.clear();
+        }
+    }
+
+    close(openFD);
+}
+
+void requestData(std::string primary, std::string updtArgument) {
+    int openFD;
+    int numRead;
+    int status;
+    struct sockaddr_in address;
+    std::vector<char> buf;  // Buffer to store server response.
+    std::vector<char> tempBuf(20000);  // Stores reads and transfers values to buf.
+    std::string command = "UPDT:" + updtArgument + "\r\n";
+    std::string primaryIP;
+    std::string primaryPort;
+    bool ipTracker = false;
+
+    for (int i = 0; i < primary.length(); i++) {
+        if (primary[i] == ':') {
+            ipTracker = true;
+        } else if (ipTracker == true) {
+            primaryPort += primary[i];
+        } else {
+            primaryIP += primary[i];
+        }
+    }
+
+    if ((openFD = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+        fprintf(stderr, "Error opening socket in request primary\n");
+    }
+
+    address.sin_family = AF_INET;
+    address.sin_port = htons(std::stoi(primaryPort));
+
+    if (inet_pton(AF_INET, primaryIP.data(), &address.sin_addr) <= 0) {
+        fprintf(stderr, "Invalid address in request primary\n");
+    }
+
+    if ((status = connect(openFD, (struct sockaddr*)&address, sizeof(address))) < 0) {
+        fprintf(stderr, "Unable to connect in request primary\n");
+    }
+
+    // Get welcome message from server.
+    while (true) {
+        numRead = read(openFD, tempBuf.data(), 2000);
+
+        if (numRead <= 0) {
+            fprintf(stderr, "Server disconnected or error occurred in request primary\n");
+        }
+
+        // Transfer read data to buf.
+        for (int i = 0; i < numRead; i++) {
+            buf.push_back(tempBuf[i]);
+        }
+
+        // Check if full message was acquired.
+        if (buf.size() == 18 && buf[0] == '+') {
+            buf.clear();
+            tempBuf.clear();
+            break;
+        } else {
+            // Clear tempBuf and try again.
+            tempBuf.clear();
+        }
+    }
+
+    // Send command to server.
+    write(openFD, &command[0], command.length());
+
+    // Get primary response from server.
+    while (true) {
+        numRead = read(openFD, tempBuf.data(), 2000);
+
+        if (numRead <= 0) {
+            fprintf(stderr, "Server disconnected or error occurred in request primary\n");
+        }
+
+        // Transfer read data to buf.
+        for (int i = 0; i < numRead; i++) {
+            buf.push_back(tempBuf[i]);
+        }
+
+        // Check if full message was acquired.
+        if (buf.size() == 5 && buf[buf.size() - 1] == '\n' && buf[0] == '+') {
+            // Done. Wait for recovery requests in other threads.
+            buf.clear();
+            tempBuf.clear();
+            break;
+        } else {
+            // Clear tempBuf and try again.
+            tempBuf.clear();
+        }
+    }
+
+    close(openFD);
+}
+
+void recoveryComplete() {
+    int openFD;
+    int numRead;
+    int status;
+    struct sockaddr_in address;
+    std::vector<char> buf;  // Buffer to store server response.
+    std::vector<char> tempBuf(20000);  // Stores reads and transfers values to buf.
+    std::string command = "RCVY," + ipPorts[myIndex] + "\r\n";
+
+    if ((openFD = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+        fprintf(stderr, "Error opening socket in request primary\n");
+    }
+
+    address.sin_family = AF_INET;
+    address.sin_port = htons(masterPort);
+
+    if (inet_pton(AF_INET, masterIP.data(), &address.sin_addr) <= 0) {
+        fprintf(stderr, "Invalid address in request primary\n");
+    }
+
+    if ((status = connect(openFD, (struct sockaddr*)&address, sizeof(address))) < 0) {
+        fprintf(stderr, "Unable to connect in request primary\n");
+    }
+
+    // Get welcome message from server.
+    while (true) {
+        numRead = read(openFD, tempBuf.data(), 2000);
+
+        if (numRead <= 0) {
+            fprintf(stderr, "Server disconnected or error occurred in request primary\n");
+        }
+
+        // Transfer read data to buf.
+        for (int i = 0; i < numRead; i++) {
+            buf.push_back(tempBuf[i]);
+        }
+
+        // Check if full message was acquired.
+        if (buf.size() == 36 && buf[0] == '+') {
+            buf.clear();
+            tempBuf.clear();
+            break;
+        } else {
+            // Clear tempBuf and try again.
+            tempBuf.clear();
+        }
+    }
+
+    // Send command to server.
+    write(openFD, &command[0], command.length());
+    // Get response from server.
+    while (true) {
+        numRead = read(openFD, tempBuf.data(), 2000);
+
+        if (numRead <= 0) {
+            fprintf(stderr, "Server disconnected or error occurred in request primary\n");
+        }
+
+        // Transfer read data to buf.
+        for (int i = 0; i < numRead; i++) {
+            buf.push_back(tempBuf[i]);
+        }
+
+        // Check if full message was acquired.
+        if (buf.size() == 26 && buf[buf.size() - 1] == '\n' && buf[0] == '+') {
+            buf.clear();
+            tempBuf.clear();
+            break;
+        } else {
+            // Clear tempBuf and try again.
+            tempBuf.clear();
+        }
+    }
+
+    // Send quit to server.
+    command = "QUIT\r\n";
+    write(openFD, &command[0], command.length());
+
+    // Get response from server.
+    while (true) {
+        numRead = read(openFD, tempBuf.data(), 2000);
+
+        if (numRead <= 0) {
+            fprintf(stderr, "Server disconnected or error occurred in request primary\n");
+        }
+
+        // Transfer read data to buf.
+        for (int i = 0; i < numRead; i++) {
+            buf.push_back(tempBuf[i]);
+        }
+
+        // Check if full message was acquired.
+        if (buf.size() == 14 && buf[buf.size() - 1] == '\n' && buf[0] == '+') {
+            buf.clear();
+            tempBuf.clear();
+            break;
+        } else {
+            // Clear tempBuf and try again.
+            tempBuf.clear();
+        }
+    }
+
+std::cout << "End of notify master.\n";
+
+    close(openFD);
 }
