@@ -375,12 +375,16 @@ std::vector<std::tuple<std::string, std::string>> get_kvs_pairs()
   int replica2_port = std::stoi(replica2_addr.substr(replica2_addr.find(":") + 1));
   int replica3_port = std::stoi(replica3_addr.substr(replica3_addr.find(":") + 1));
 
+  std::cerr << "replica1_addr: " << replica1_addr << std::endl;
+  std::cerr << "replica2_addr: " << replica2_addr << std::endl;
+  std::cerr << "replica3_addr: " << replica3_addr << std::endl;
+
   std::vector<int> replica_ports = {replica1_port, replica2_port, replica3_port};
 
   // Make a PAIR request to each backend server
   std::string request = "PAIR\r\n";
 
-  for (int port : replica_ports)
+  for (int p : replica_ports)
   {
 
     int s = socket(PF_INET, SOCK_STREAM, 0);
@@ -388,7 +392,12 @@ std::vector<std::tuple<std::string, std::string>> get_kvs_pairs()
     bzero(&serveraddr, sizeof(serveraddr));
     serveraddr.sin_family = AF_INET;
     inet_pton(AF_INET, MASTER_SERVER_ADDR.c_str(), &serveraddr.sin_addr);
-    serveraddr.sin_port = htons(port);
+    serveraddr.sin_port = htons(p);
+
+    if (connect(s, (struct sockaddr *)&serveraddr, sizeof(serveraddr)) < 0)
+    {
+      return {};
+    }
 
     write(s, request.c_str(), request.length());
 
@@ -416,21 +425,71 @@ std::vector<std::tuple<std::string, std::string>> get_kvs_pairs()
         end_index++;
       }
     }
+    std::cerr << "command: " << command << std::endl;
 
-    // Parse response
-    // Split response by :
-    std::string delimiter = ":";
-    size_t pos = 0;
-    std::string token;
-    while ((pos = command.find(delimiter)) != std::string::npos)
+    if (command.length() < 3 || command.substr(0, 3) != "+OK")
     {
-      token = command.substr(0, pos);
-      // Split token by ,
-      std::string row = token.substr(0, token.find(","));
-      std::string col = token.substr(token.find(",") + 1);
-      pairs.push_back(std::make_tuple(row, col));
-      command.erase(0, pos + delimiter.length());
+      return {};
     }
+
+    // Read for kv pairs
+    bzero(buffer, MAX_BUFF_SIZE);
+    has_full_command = false;
+    end_index = 0;
+
+    while (!has_full_command)
+    {
+      char c;
+      if (read(s, &c, 1) > 0)
+      {
+        buffer[end_index] = c;
+
+        if (end_index >= 1 && c == '\n' && buffer[end_index - 1] == '\r')
+        {
+          has_full_command = true;
+          buffer[end_index - 1] = '\0'; // Replace \r\n with \0
+          command = buffer;
+        }
+
+        end_index++;
+      }
+    }
+
+    std::cerr << "command: " << command << std::endl;
+
+    // Remove +OK from response
+    if (command.length() > 4)
+    {
+      command = command.substr(4);
+      // Parse response
+      // Split response by :
+      std::string delimiter = ":";
+      size_t pos = 0;
+      std::string token;
+      while ((pos = command.find(delimiter)) != std::string::npos)
+      {
+        token = command.substr(0, pos);
+        // Split token by ,
+        std::string row = token.substr(0, token.find(","));
+        std::string col = token.substr(token.find(",") + 1);
+        pairs.push_back(std::make_tuple(row, col));
+        command.erase(0, pos + delimiter.length());
+      }
+
+      if (command.length() > 0)
+      {
+        // Split token by ,
+        std::string row = command.substr(0, command.find(","));
+        std::string col = command.substr(command.find(",") + 1);
+        pairs.push_back(std::make_tuple(row, col));
+      }
+    }
+    std::cerr << "kv pairs after: " << p << std::endl;
+    for (auto pair : pairs)
+    {
+      std::cerr << std::get<0>(pair) << " " << std::get<1>(pair) << std::endl;
+    }
+    close(s);
   }
 
   // Return vector of tuples {row, col, value}
@@ -1366,7 +1425,9 @@ std::tuple<std::string, std::string, std::string> get_admin(ReqInitLine *req_ini
   message_body.insert(insert_index + insert_tag.length(), frontend_server_script);
 
   // Get key value pairs
+  std::cerr << "Getting key value pairs" << std::endl;
   std::vector<std::tuple<std::string, std::string>> kv_pairs = get_kvs_pairs();
+  std::cerr << "After key value pairs" << std::endl;
   std::string kv_script = "\nconst kv_pairs = [\n";
   for (auto const &kv : kv_pairs)
   {
@@ -1376,6 +1437,8 @@ std::tuple<std::string, std::string, std::string> get_admin(ReqInitLine *req_ini
     kv_script += "},\n";
   }
   kv_script += "];\n";
+
+  message_body.insert(insert_index + insert_tag.length(), kv_script);
 
   // Create inital response line
   std::string init_response = req_init_line->version + " 200 OK\r\n";
@@ -1562,7 +1625,8 @@ std::tuple<std::string, std::string, std::string> post_signup(ReqInitLine *req_i
   // create file metadata file, and set home directory / to uuid 1
   command = put_kvs(backend_address, backend_port, "file_" + username, "metadata.txt", "/:1\n", false, "");
 
-  if (command.substr(0, 5) == "--ERR") {
+  if (command.substr(0, 5) == "--ERR")
+  {
     // error occurred when putting-- return ERR
     std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
     std::string message_body = "Servers are down. Please try again later.";
@@ -2104,16 +2168,18 @@ std::tuple<std::string, std::string, std::string> post_restart_server(ReqInitLin
   return std::make_tuple(init_response, headers, message_body);
 }
 
-std::tuple<std::string, std::string, std::string> get_kvs_data(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body) {
+std::tuple<std::string, std::string, std::string> get_kvs_data(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body)
+{
   std::unordered_map<std::string, std::string> body_map = parse_post_body_url_encoded(body);
   std::string row_key = body_map["rowkey"];
   std::string column_key = body_map["columnkey"];
-  // query master for backend server 
+  // query master for backend server
   std::string backend_address_port = get_backend_address(row_key);
-  if (backend_address_port.substr(0, 5) == "--ERR") {
-    // server group is down! return 503 error 
+  if (backend_address_port.substr(0, 5) == "--ERR")
+  {
+    // server group is down! return 503 error
     std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-    std::string message_body = "Servers are down. Please try again later."; 
+    std::string message_body = "Servers are down. Please try again later.";
     std::string headers = "";
     headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
     return std::make_tuple(init_response, headers, message_body);
@@ -2121,23 +2187,22 @@ std::tuple<std::string, std::string, std::string> get_kvs_data(ReqInitLine *req_
   std::string backend_address = backend_address_port.substr(0, backend_address_port.find(":"));
   int backend_port = std::stoi(backend_address_port.substr(backend_address_port.find(":") + 1));
 
-  std::string response =  get_kvs(backend_address, backend_port, row_key, column_key);
-  if (response.substr(0, 5) == "--ERR") {
+  std::string response = get_kvs(backend_address, backend_port, row_key, column_key);
+  if (response.substr(0, 5) == "--ERR")
+  {
     // failed to connect to backend! return an error
     std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-    std::string message_body = "An error occurred. Please try again later."; 
+    std::string message_body = "An error occurred. Please try again later.";
     std::string headers = "";
     headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
     return std::make_tuple(init_response, headers, message_body);
   }
-
 
   std::string init_response = req_init_line->version + " 200 OK\r\n";
   std::string headers = "Content-Type: text/html\r\n";
   headers += "Content-Length: " + std::to_string(response.length()) + "\r\n";
   return std::make_tuple(init_response, headers, response);
 }
-
 
 // File system functions
 // Get
@@ -2575,7 +2640,7 @@ std::tuple<std::string, std::string, std::string> post_file(ReqInitLine *req_ini
   }
 
   // write to new row data of the file
-  backend_address_port = get_backend_address(username + std::to_string(new_uuid) + ".txt");
+  backend_address_port = get_backend_address(username + "_" + std::to_string(new_uuid) + ".txt");
   if (backend_address_port.substr(0, 5) == "--ERR")
   {
     // server group is down! return 503 error
@@ -2589,7 +2654,7 @@ std::tuple<std::string, std::string, std::string> post_file(ReqInitLine *req_ini
   backend_port = std::stoi(backend_address_port.substr(backend_address_port.find(":") + 1));
 
   // write data in new row
-  command = put_kvs(backend_address, backend_port, username + std::to_string(new_uuid) + ".txt", "data.txt", file_info, false, "");
+  command = put_kvs(backend_address, backend_port, username + "_" + std::to_string(new_uuid) + ".txt", "data.txt", file_info, false, "");
   if (command.substr(0, 5) == "--ERR")
   {
     // error occurred when putting-- return ERR
@@ -2672,7 +2737,7 @@ std::tuple<std::string, std::string, std::string> download_file(ReqInitLine *req
   std::string uuid = temp.substr(col_ind + 1, end_ind - col_ind - 1) + ".txt";
 
   // open file data
-  backend_address_port = get_backend_address(username + uuid);
+  backend_address_port = get_backend_address(username + "_" + uuid);
   if (backend_address_port.substr(0, 5) == "--ERR")
   {
     // server group is down! return 503 error
@@ -2685,7 +2750,7 @@ std::tuple<std::string, std::string, std::string> download_file(ReqInitLine *req
   backend_address = backend_address_port.substr(0, backend_address_port.find(":"));
   backend_port = std::stoi(backend_address_port.substr(backend_address_port.find(":") + 1));
 
-  std::string file_data = get_kvs(backend_address, backend_port, username + uuid, "data.txt");
+  std::string file_data = get_kvs(backend_address, backend_port, username + "_" + uuid, "data.txt");
   if (file_data.substr(0, 5) == "--ERR")
   {
     // failed to connect to backend! return an error
@@ -2974,7 +3039,7 @@ std::tuple<std::string, std::string, std::string> delete_file(ReqInitLine *req_i
   command = delete_kvs(backend_address, backend_port, "file_" + username, uuid + ".txt");
 
   // delete data of file
-  std::string data_backend_address_port = get_backend_address(username + uuid + ".txt");
+  std::string data_backend_address_port = get_backend_address(username + "_" + uuid + ".txt");
   if (data_backend_address_port.substr(0, 5) == "--ERR")
   {
     // server group is down! return 503 error
@@ -2987,7 +3052,7 @@ std::tuple<std::string, std::string, std::string> delete_file(ReqInitLine *req_i
   std::string data_backend_address = data_backend_address_port.substr(0, data_backend_address_port.find(":"));
   int data_backend_port = std::stoi(data_backend_address_port.substr(data_backend_address_port.find(":") + 1));
 
-  command = delete_kvs(data_backend_address, data_backend_port, username + uuid + ".txt", "data.txt");
+  command = delete_kvs(data_backend_address, data_backend_port, username + "_" + uuid + ".txt", "data.txt");
 
   // while something exists in the metadata that is a child of this path, delete it
   next_ind = metadata.find("\n" + file_path + "/");
@@ -3012,7 +3077,7 @@ std::tuple<std::string, std::string, std::string> delete_file(ReqInitLine *req_i
     command = delete_kvs(backend_address, backend_port, "file_" + username, uuid + ".txt");
     next_ind = metadata.find("\n" + file_path + "/");
 
-    data_backend_address_port = get_backend_address(username + uuid + ".txt");
+    data_backend_address_port = get_backend_address(username + "_" + uuid + ".txt");
     if (data_backend_address_port.substr(0, 5) == "--ERR")
     {
       // server group is down! return 503 error
@@ -3025,7 +3090,7 @@ std::tuple<std::string, std::string, std::string> delete_file(ReqInitLine *req_i
     data_backend_address = data_backend_address_port.substr(0, data_backend_address_port.find(":"));
     data_backend_port = std::stoi(data_backend_address_port.substr(data_backend_address_port.find(":") + 1));
 
-    command = delete_kvs(data_backend_address, data_backend_port, username + uuid + ".txt", "data.txt");
+    command = delete_kvs(data_backend_address, data_backend_port, username + "_" + uuid + ".txt", "data.txt");
   }
 
   std::string message_body = "";
