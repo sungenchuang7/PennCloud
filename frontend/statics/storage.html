@@ -5,33 +5,72 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Penn Cloud</title>
+    <style>
+      .option-container {
+        margin-left: auto;
+        margin-right: auto;
+        display: flex;
+        gap: 5px;
+      }
+      .container {
+        text-align: center;
+        outline: 1px solid black;
+        padding: 30px;
+        border-radius: 5px;
+      }
+      .storage-container {
+        text-align: center;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+    </style>
 </head>
 
 <body>
-    <!--add conditional to change "Inbox" to whatever directory we are currently in-->
+  <div class="storage-container">
+    <!--add conditional to change "Storage" to whatever directory we are currently in-->
     <h1>Storage</h1>
+    <!--add folder name here-->
     <a href="/home">Back to Home</a>
-    <br><br>
+    <br>
     <!-- form to upload a new file -->
-    <h3>Upload</h3>
-    <form action="/upload" method="post" enctype="multipart/form-data" id="form">
-        <label for="file">File: </label>
-        <input type="file" id="file" name="filename" required>
-        <br><br>
-        <input type="submit" value="Upload">
-    <br><br>
-    <h3>New Folder</h3>
-    <form action="/new_folder" method="post">
-      <label for="name">Folder Name: </label>
-      <input type="text" id="name" name="name">
-      <br><br>
-      <input type="submit" value="Create New Folder">
-    </form>
-    <br><br>
-    <h3>Your Files</h3>
-    <ul id="fileList">
-        <!-- file html elements here -->
-    </ul>
+    <div class="option-container">
+      <div class="container">
+        <h3>Upload</h3>
+        <form action="/upload" method="post" enctype="multipart/form-data" id="form">
+            <label for="file">File: </label>
+            <input type="file" id="file" name="filename" required>
+            <br><br>
+            <input type="submit" value="Upload">
+        </form>
+      </div>
+      <br>
+      <div class="container">
+      <h3>New Folder</h3>
+        <form action="/new_folder" method="post" id="folder-form">
+          <label for="name">Folder Name: </label>
+          <input type="text" id="name" name="name" required>
+          <br><br>
+          <input type="submit" value="Create New Folder">
+        </form>
+      </div>
+    </div>
+    <br>
+    <!--delete and rename buttons here-->
+    <div>
+      <h3>Your Files</h3>
+      <ul id="fileList">
+          <!-- file html elements here -->
+      </ul>
+    </div>
+    <div>
+      <h3>Your Folders</h3>
+      <ul id="folderList">
+        <!-- folder html elements here-->
+      </ul>
+    </div>
+  </div>
 
     <script>
 
@@ -45,6 +84,7 @@
 
         function onLoad() {
             const fileListElement = document.getElementById('fileList');
+            const folderListElement = document.getElementById('folderList');
             files.forEach(file => {
                 const listItem = document.createElement('li');
                 // basically redirect to /storage if it's another directory, /file for the file page
@@ -57,7 +97,11 @@
                     <a href="/file${file.file_id}">
                         <strong>${file.name}</strong><br>
                     </a>`;
-                fileListElement.appendChild(listItem);
+                if (file.is_directory) {
+                  folderListElement.appendChild(listItem);
+                } else {
+                  fileListElement.appendChild(listItem);
+                }
             });
 
             const formElement = document.getElementById('form');
@@ -65,10 +109,20 @@
             // TODO: I'm hardcoding it right now for some reason lol
             let storage_index = currentURL.search("storage");
             let path = currentURL.substring(storage_index + 7);
-            if (path == "") {
-              path = "/";
-            }
+
             formElement.setAttribute('action', `/upload${path}`);
+            
+            const folderForm = document.getElementById('folder-form');
+            folderForm.setAttribute('action', `/new_folder${path}`);
+
+            const deleteForm = document.getElementById('delete-form');
+            deleteForm.setAttribute('action', `/delete${path}`);
+
+            const renameForm = document.getElementById('rename-form');
+            renameForm.setAttribute('action', `/rename${path}`);
+
+            const moveForm = document.getElementById('move-form');
+            moveForm.setAttribute('action', `/move${path}`);
         }
 
         window.onload = onLoad;

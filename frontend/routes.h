@@ -40,13 +40,16 @@ std::tuple<std::string, std::string, std::string> post_change_password(ReqInitLi
 std::tuple<std::string, std::string, std::string> post_kill_server(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body);
 std::tuple<std::string, std::string, std::string> post_restart_server(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body);
 
-// inbox stuff 
+// inbox stuff
 // GET ROUTES
 std::tuple<std::string, std::string, std::string> get_storage(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers);
 std::tuple<std::string, std::string, std::string> get_file(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers);
 std::tuple<std::string, std::string, std::string> download_file(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers);
 
-
-// POST ROUTES 
+// POST ROUTES
 std::tuple<std::string, std::string, std::string> post_file(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body);
+std::tuple<std::string, std::string, std::string> post_folder(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body);
+std::tuple<std::string, std::string, std::string> delete_file(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body);
+std::tuple<std::string, std::string, std::string> rename_file(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body);
+std::tuple<std::string, std::string, std::string> move_file(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body);
 #endif

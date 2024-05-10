@@ -84,7 +84,6 @@ std::unordered_map<std::string, std::string> parse_cookies(std::string cookies)
   return cookie_map;
 }
 
-
 // BACKEND GET ROUTES
 
 // Ping master node for backend server address
@@ -431,18 +430,29 @@ std::string get_kvs(std::string ip, int port, std::string row, std::string col)
   bzero(buffer, MAX_BUFF_SIZE);
   has_full_command = false;
   end_index = 0;
+  std::vector<char> vec;
   while (!has_full_command)
   {
     char c;
     if (read(sock, &c, 1) > 0)
     {
-      buffer[end_index] = c;
+      vec.push_back(c);
 
-      if (end_index >= 4 && c == '\n' && buffer[end_index - 1] == '\r' && buffer[end_index - 2] == '.' && buffer[end_index - 3] == '\n' && buffer[end_index - 4] == '\r')
+      if (end_index >= 4 && c == '\n' && vec[end_index - 1] == '\r' && vec[end_index - 2] == '.' && vec[end_index - 3] == '\n' && vec[end_index - 4] == '\r')
       {
         has_full_command = true;
-        buffer[end_index - 4] = '\0'; // Replace \r\n.\r\n with \0
-        command = buffer;
+        vec.pop_back();
+        vec.pop_back();
+        vec.pop_back();
+        vec.pop_back();
+        vec.pop_back();
+        command = std::string(vec.begin(), vec.end());
+        // std::cout << "vec as hex: " << std::endl;
+        // for (char c : vec)
+        // {
+        //   std::cout << std::hex << std::setw(2) << std::setfill('0') << (int)(unsigned char)c << " ";
+        // }
+        // command = buffer;
       }
 
       end_index++;
@@ -451,6 +461,11 @@ std::string get_kvs(std::string ip, int port, std::string row, std::string col)
 
   // Close connection
   close(sock);
+  // std::cout << "command buffer as hex: before return" << std::endl;
+  // for (char c : command)
+  // {
+  //   std::cout << std::hex << std::setw(2) << std::setfill('0') << (int)(unsigned char)c << " ";
+  // }
   return command;
 }
 
@@ -507,7 +522,8 @@ std::string put_kvs(std::string ip, int port, std::string row, std::string col, 
   {
     std::string request = "CPUT:" + row + ":" + col + "\r\n";
     write(sock, request.c_str(), request.length());
-  } else
+  }
+  else
   {
     std::string request = "PUT:" + row + ":" + col + "\r\n";
     write(sock, request.c_str(), request.length());
@@ -574,37 +590,37 @@ std::string put_kvs(std::string ip, int port, std::string row, std::string col, 
     {
       return "--ERR failed to send DATA to backend server: " + command;
     }
-      // Write prev_value to server ending in <CRLF>.<CRLF>
-      request = prev_value + "\r\n.\r\n";
-      write(sock, request.c_str(), request.length());
-      // Read for +OK
-      bzero(buffer, MAX_BUFF_SIZE);
-      has_full_command = false;
-      end_index = 0;
+    // Write prev_value to server ending in <CRLF>.<CRLF>
+    request = prev_value + "\r\n.\r\n";
+    write(sock, request.c_str(), request.length());
+    // Read for +OK
+    bzero(buffer, MAX_BUFF_SIZE);
+    has_full_command = false;
+    end_index = 0;
 
-      while (!has_full_command)
+    while (!has_full_command)
+    {
+      char c;
+      if (read(sock, &c, 1) > 0)
       {
-        char c;
-        if (read(sock, &c, 1) > 0)
+        buffer[end_index] = c;
+
+        if (end_index >= 1 && c == '\n' && buffer[end_index - 1] == '\r')
         {
-          buffer[end_index] = c;
-
-          if (end_index >= 1 && c == '\n' && buffer[end_index - 1] == '\r')
-          {
-            has_full_command = true;
-            buffer[end_index - 1] = '\0'; // Replace \r\n with \0
-            command = buffer;
-          }
-
-          end_index++;
+          has_full_command = true;
+          buffer[end_index - 1] = '\0'; // Replace \r\n with \0
+          command = buffer;
         }
+
+        end_index++;
       }
-      if (command != "+OK Enter second value with DATA")
-      {
-        return "--ERR failed to store value in backend server: " + command;
-      }
+    }
+    if (command != "+OK Enter second value with DATA")
+    {
+      return "--ERR failed to store value in backend server: " + command;
+    }
   }
-  
+
   // Send data to server
   std::string request = "DATA\r\n";
   write(sock, request.c_str(), request.length());
@@ -635,7 +651,7 @@ std::string put_kvs(std::string ip, int port, std::string row, std::string col, 
   {
     return "--ERR failed to send DATA to backend server: " + command;
   }
-  
+
   // Write new value to server ending in <CRLF>.<CRLF>
   request = value + "\r\n.\r\n";
   write(sock, request.c_str(), request.length());
@@ -793,7 +809,7 @@ std::tuple<std::string, std::string, std::string> get_index(ReqInitLine *req_ini
     char uuid_str[37];
     uuid_unparse(uuid, uuid_str);
     headers += "Set-Cookie: sid=" + std::string(uuid_str) + "; Path=/\r\n";
-    // set username for cookie to empty string 
+    // set username for cookie to empty string
     usernames[std::string(uuid_str)] = "";
   }
 
@@ -918,7 +934,6 @@ std::tuple<std::string, std::string, std::string> get_inbox(ReqInitLine *req_ini
     return std::make_tuple(init_response, headers, message_body);
   }
 
-
   // Get username
   std::string sid = cookies["sid"];
   std::string username = usernames[sid];
@@ -955,7 +970,6 @@ std::tuple<std::string, std::string, std::string> get_inbox(ReqInitLine *req_ini
         if (line.find("DATE: ") == 0)
         {
           arrival_time = line.substr(6);
-        
         }
         else if (line.find("FROM: ") == 0)
         {
@@ -973,18 +987,16 @@ std::tuple<std::string, std::string, std::string> get_inbox(ReqInitLine *req_ini
         {
           message = line.substr(9);
         }
-
       }
       emails[message_id] = {message_id, subject, sender, arrival_time};
     }
   }
-  
+
   // Sort by arrival time
   std::vector<std::pair<std::string, Email>> sorted_emails(emails.begin(), emails.end());
-  std::sort(sorted_emails.begin(), sorted_emails.end(), [](const std::pair<std::string, Email> &a, const std::pair<std::string, Email> &b) {
-    return a.second.arrival_time > b.second.arrival_time;
-  });
-  
+  std::sort(sorted_emails.begin(), sorted_emails.end(), [](const std::pair<std::string, Email> &a, const std::pair<std::string, Email> &b)
+            { return a.second.arrival_time > b.second.arrival_time; });
+
   // Map of email messages {message_id, subject, sender, arrival_time}
   // std::unordered_map<std::string, Email> emails = {
   //     {"message1", {"message1", "Subject 1", "user1@localhost", "Sat Apr 13 00:00:00 2024"}},
@@ -1107,7 +1119,7 @@ std::tuple<std::string, std::string, std::string> get_inbox_message(ReqInitLine 
 
   // Insert message into HTML
   std::string insert_tag = "<div class=\"email-container\">";
-  int insert_index = message_body.find(insert_tag);  
+  int insert_index = message_body.find(insert_tag);
   std::string email_html = "\n<p id=\"email-text\">";
   for (int i = 0; i < message.length(); i++)
   {
@@ -1335,11 +1347,11 @@ std::tuple<std::string, std::string, std::string> post_signup(ReqInitLine *req_i
   std::string backend_address_port = get_backend_address("user_" + username);
   std::string backend_address = backend_address_port.substr(0, backend_address_port.find(":"));
   int backend_port = std::stoi(backend_address_port.substr(backend_address_port.find(":") + 1));
-  
-  // create user file 
+
+  // create user file
   std::string command = put_kvs(backend_address, backend_port, "user_" + username, "password.txt", password, false, "");
 
-  // TODO: handle error 
+  // TODO: handle error
 
   backend_address_port = get_backend_address("email_" + username);
   backend_address = backend_address_port.substr(0, backend_address_port.find(":"));
@@ -1348,7 +1360,7 @@ std::tuple<std::string, std::string, std::string> post_signup(ReqInitLine *req_i
   // after creating user file, also create metadata files for file and email
   // create email metadata file
   command = put_kvs(backend_address, backend_port, "email_" + username, "metadata.txt", "Metadata\n", false, ""); // Need to send non empty value
-  // TODO: handle error 
+  // TODO: handle error
 
   backend_address_port = get_backend_address("file_" + username);
   backend_address = backend_address_port.substr(0, backend_address_port.find(":"));
@@ -1362,7 +1374,6 @@ std::tuple<std::string, std::string, std::string> post_signup(ReqInitLine *req_i
   // create home directory
   command = put_kvs(backend_address, backend_port, "file_" + username, "1.txt", "is_directory:true\nparent:0\nchildren_files:\nchildren_folders:\n", false, "");
 
-  
   std::string message_body = "";
   std::string init_response = req_init_line->version + " 303 Success\r\n";
   std::string headers = "";
@@ -1404,7 +1415,7 @@ std::tuple<std::string, std::string, std::string> post_send_message(ReqInitLine 
     // FROM: usename@domain
     // TO: recipient@domain
     // SUBJECT: subject
-    // MESSAGE: message    
+    // MESSAGE: message
     std::string username = usernames[parse_cookies(req_headers["Cookie"])["sid"]];
     std::time_t email_time = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
     std::string email_time_string = std::ctime(&email_time);
@@ -1423,7 +1434,7 @@ std::tuple<std::string, std::string, std::string> post_send_message(ReqInitLine 
       uidl += "0123456789ABCDEF"[digest_buf[i] / 16];
       uidl += "0123456789ABCDEF"[digest_buf[i] % 16];
     }
-    
+
     // Make backend call to insert message into database only if the recipeint is a penncloud user
     if (recipient.find("@penncloud") != std::string::npos)
     {
@@ -1434,7 +1445,7 @@ std::tuple<std::string, std::string, std::string> post_send_message(ReqInitLine 
       int backend_port = std::stoi(backend_address_port.substr(backend_address_port.find(":") + 1));
       // Check if user exists
       std::string user_exists = get_kvs(backend_address, backend_port, "email_" + recipient_remove_domain, "metadata.txt");
-      if (user_exists.length()  <= 5 || user_exists.length() > 5 && user_exists.substr(0, 5) != "--ERR")
+      if (user_exists.length() <= 5 || user_exists.length() > 5 && user_exists.substr(0, 5) != "--ERR")
       {
         std::string put_email_response = put_kvs(backend_address, backend_port, "email_" + recipient_remove_domain, uidl + ".txt", email_str, false, "");
         // std::cerr << "Put email response: " << put_email_response << std::endl;
@@ -1448,21 +1459,23 @@ std::tuple<std::string, std::string, std::string> post_send_message(ReqInitLine 
           // std::cerr << "Recipient: " << recipient_remove_domain << std::endl;
           std::string metadata = get_kvs(backend_address, backend_port, "email_" + recipient_remove_domain, "metadata.txt");
           // std::cerr << "Get metadata response: " << metadata << std::endl;
-          if (metadata.length()  <= 5 || metadata.length() > 5 && metadata.substr(0, 5) != "--ERR")
+          if (metadata.length() <= 5 || metadata.length() > 5 && metadata.substr(0, 5) != "--ERR")
           {
             put_metadata_response = put_kvs(backend_address, backend_port, "email_" + recipient_remove_domain, "metadata.txt", metadata + uidl + "\n", true, metadata);
             // std::cerr << "Put metadata response: " << put_metadata_response << std::endl;
-          }   
+          }
         }
       }
-      else {
+      else
+      {
         std::string init_response = req_init_line->version + " 500 Internal Server Error\r\n";
         std::string message_body = "The recipent(s) do not have an account in penncloud.";
         std::string headers = "";
         headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
         return std::make_tuple(init_response, headers, message_body);
       }
-    } else
+    }
+    else
     {
       // User is outside of @penncloud
 
@@ -1510,13 +1523,13 @@ std::tuple<std::string, std::string, std::string> post_send_message(ReqInitLine 
         struct hostent *mx_host = gethostbyname(mx_domain_ascii);
         ip_addr = inet_ntoa(*(struct in_addr *)mx_host->h_addr_list[0]);
       }
-      
+
       // std::cerr << "ip_addr: " << ip_addr << std::endl;
-      
+
       // Send info to smtp client
-      std::string smtp_client_msg = ip_addr + ":25\n"; // Remote server address
+      std::string smtp_client_msg = ip_addr + ":25\n";   // Remote server address
       smtp_client_msg += username + "@seas.upenn.edu\n"; // From (change to seas.upenn.edu to avoid spam filter)
-      smtp_client_msg += recipient + "\n"; // To
+      smtp_client_msg += recipient + "\n";               // To
 
       smtp_client_msg += "From: <" + username + "@seas.upenn.edu>\n";
       smtp_client_msg += "To: <" + recipient + ">\n";
@@ -1587,12 +1600,12 @@ std::tuple<std::string, std::string, std::string> post_delete_message(ReqInitLin
 
     std::string metadata = get_kvs(backend_address, backend_port, "email_" + username, "metadata.txt");
     std::cerr << "Get metadata response: " << metadata << std::endl;
-    if (metadata.length()  <= 5 || metadata.length() > 5 && metadata.substr(0, 5) != "--ERR")
+    if (metadata.length() <= 5 || metadata.length() > 5 && metadata.substr(0, 5) != "--ERR")
     {
       std::string new_metadata = metadata.substr(0, metadata.find(message_id) - 1) + metadata.substr(metadata.find(message_id) + message_id.length());
       put_metadata_response = put_kvs(backend_address, backend_port, "email_" + username, "metadata.txt", new_metadata, true, metadata);
       std::cerr << "Put metadata response: " << put_metadata_response << std::endl;
-    }    
+    }
   }
 
   // Ping backend master for backend server address
@@ -1603,7 +1616,7 @@ std::tuple<std::string, std::string, std::string> post_delete_message(ReqInitLin
   // Call delete on email message
   std::string delete_email_response = delete_kvs(backend_address, backend_port, "email_" + username, message_id + ".txt");
   std::cerr << "Delete email response: " << delete_email_response << std::endl;
-  
+
   std::string init_response = req_init_line->version + " 200 OK\r\n";
   std::string message_body = "Message deleted successfully.";
   std::string headers = "";
@@ -1652,12 +1665,12 @@ std::tuple<std::string, std::string, std::string> post_change_password(ReqInitLi
     int backend_port = std::stoi(backend_address_port.substr(backend_address_port.find(":") + 1));
 
     std::string old_password = get_kvs(backend_address, backend_port, "user_" + username, "password.txt");
-    if (old_password.length()  <= 5 || old_password.length() > 5 && old_password.substr(0, 5) != "--ERR")
+    if (old_password.length() <= 5 || old_password.length() > 5 && old_password.substr(0, 5) != "--ERR")
     {
       put_metadata_response = put_kvs(backend_address, backend_port, "user_" + username, "password.txt", password, true, old_password);
-    }   
+    }
   }
-  
+
   // Redirect to login page
   std::string message_body = "";
   std::string init_response = req_init_line->version + " 303 Found\r\n";
@@ -1840,19 +1853,23 @@ std::tuple<std::string, std::string, std::string> get_storage(ReqInitLine *req_i
 
   // Get user sid cookie value
   std::string sid = cookies["sid"];
-  // get username from cookie 
+  // get username from cookie
   std::string username = usernames[sid];
 
   fprintf(stderr, "logged in: %s\n", username.c_str());
 
-  // Get path of folder 
+  // Get path of folder
   std::string folder_path;
-  if (req_init_line->path.length() == 8) {
+  if (req_init_line->path.length() == 8)
+  {
     // path is just /storage
     folder_path = "";
-  } else {
+  }
+  else
+  {
     folder_path = req_init_line->path.substr(8);
-    if (folder_path == "/") {
+    if (folder_path == "/")
+    {
       folder_path = "";
     }
   }
@@ -1880,18 +1897,19 @@ std::tuple<std::string, std::string, std::string> get_storage(ReqInitLine *req_i
   std::string folder_data = get_kvs(backend_address, backend_port, "file_" + username, uuid);
   fprintf(stderr, "folder_data: %s\n", folder_data.c_str());
 
-  // start getting children 
-  std::vector<File*> files;
+  // start getting children
+  std::vector<File *> files;
   // parse children_files data for children files
   int curr_ind = folder_data.find("children_files:\n");
   folder_data = folder_data.substr(curr_ind + 16);
   int test_ind = folder_data.find("children_folders:\n");
-  curr_ind = folder_data.find("\n"); 
-  while(curr_ind < test_ind) {
+  curr_ind = folder_data.find("\n");
+  while (curr_ind < test_ind)
+  {
     std::string file_value = folder_data.substr(0, curr_ind);
     col_ind = file_value.find(":");
     std::string file_name = file_value.substr(0, col_ind);
-    File* temp = new File(); 
+    File *temp = new File();
     temp->is_directory = false;
     temp->file_id = folder_path + "/" + file_name;
     temp->name = file_name;
@@ -1900,15 +1918,16 @@ std::tuple<std::string, std::string, std::string> get_storage(ReqInitLine *req_i
     curr_ind = folder_data.find("\n");
     test_ind = folder_data.find("children_folders:");
   }
-  // parse children_folders for children folders 
-  // at this point, curr_ind should point to the \n at the end of children_files: 
-  folder_data = folder_data.substr(curr_ind + 1); 
+  // parse children_folders for children folders
+  // at this point, curr_ind should point to the \n at the end of children_files:
+  folder_data = folder_data.substr(curr_ind + 1);
   curr_ind = folder_data.find("\n");
-  while (curr_ind != std::string::npos) {
+  while (curr_ind != std::string::npos)
+  {
     std::string folder_value = folder_data.substr(0, curr_ind);
     col_ind = folder_value.find(":");
     std::string folder_name = folder_value.substr(0, col_ind);
-    File* temp = new File();
+    File *temp = new File();
     temp->is_directory = true;
     temp->file_id = folder_path + "/" + folder_name;
     temp->name = folder_name;
@@ -1916,7 +1935,6 @@ std::tuple<std::string, std::string, std::string> get_storage(ReqInitLine *req_i
     folder_data = folder_data.substr(curr_ind + 1);
     curr_ind = folder_data.find("\n");
   }
-
 
   // Create response and send HTML
   std::ifstream storage_file(STATICS_LOC + "storage.html");
@@ -1960,6 +1978,27 @@ std::tuple<std::string, std::string, std::string> get_storage(ReqInitLine *req_i
   }
   file_script += "];\n";
   message_body.insert(insert_index + insert_tag.length(), file_script);
+  // Insert path into HTML after <!-- comment
+  insert_tag = "<!--add folder name here-->";
+  insert_index = message_body.find(insert_tag);
+  std::string insert_string;
+  if (folder_path == "")
+  {
+    insert_string = "<h2>/</h2>";
+  }
+  else
+  {
+    insert_string = "<h2>" + folder_path + "</h2>";
+  }
+  message_body.insert(insert_index + insert_tag.length(), insert_string);
+
+  if (folder_path != "")
+  {
+    insert_tag = "<!--delete and rename buttons here-->";
+    insert_index = message_body.find(insert_tag);
+    insert_string = "<div class=\"option-container\">\n<div class=\"container\">\n<h3>Delete</h3>\n<form action=\"/delete\" method=\"post\" id=\"delete-form\">\n<input type=\"submit\" value=\"Delete This Folder\">\n</form>\n</div>\n<br>\n<div class=\"container\"><h3>Rename</h3>\n<form action=\"/rename\" method=\"post\" id=\"rename-form\">\n<label for=\"name\">New Name: </label>\n<input type=\"text\" id=\"name\" name=\"name\" required>\n<br><br><input type=\"submit\" value=\"Rename This Folder\"></form>\n</div>\n<div class=\"container\">\n<h3>Move</h3><form action=\"/move\" id=\"move-form\" method=\"post\">\n<label for=\"dest\">Move to Folder: </label>\n<input type=\"text\" id=\"dest\" name=\"dest\" required>\n<br><br>\n<input type=\"submit\" value=\"Move\">\n</form>\n<br></div>\n</div>\n";
+    message_body.insert(insert_index + insert_tag.length(), insert_string);
+  }
 
   // Create inital response line
   std::string init_response = req_init_line->version + " 200 OK\r\n";
@@ -2002,41 +2041,43 @@ std::tuple<std::string, std::string, std::string> get_file(ReqInitLine *req_init
 
   // Get user sid cookie value
   std::string sid = cookies["sid"];
-  // get username from cookie 
+  // get username from cookie
   std::string username = usernames[sid];
 
-  // Get path of folder 
+  // Get path of folder
   std::string file_path = req_init_line->path.substr(5);
   int slash_ind = file_path.find("/");
   std::string file_name = file_path;
-  while (slash_ind != std::string::npos) {
+  while (slash_ind != std::string::npos)
+  {
     file_name = file_name.substr(slash_ind + 1);
     slash_ind = file_name.find("/");
   }
 
-  // Ping backend master for backend server address
-  std::string backend_address_port = get_backend_address("file_" + username);
-  std::string backend_address = backend_address_port.substr(0, backend_address_port.find(":"));
-  int backend_port = std::stoi(backend_address_port.substr(backend_address_port.find(":") + 1));
-  
-  // TODO: test this
-  // query backend for the uuid of this folder
-  std::string metadata = get_kvs(backend_address, backend_port, "file_" + username, "metadata.txt");
+  // // Ping backend master for backend server address
+  // std::string backend_address_port = get_backend_address("file_" + username);
+  // std::string backend_address = backend_address_port.substr(0, backend_address_port.find(":"));
+  // int backend_port = std::stoi(backend_address_port.substr(backend_address_port.find(":") + 1));
 
-  // parse metadata file for the uuid of the folder
-  std::string searchable = file_path + ":";
-  int ind = metadata.find(searchable);
-  std::string temp = metadata.substr(ind);
-  int col_ind = temp.find(":");
-  int end_ind = temp.find("\n");
-  std::string uuid = temp.substr(col_ind + 1, end_ind - col_ind - 1) + ".txt";
+  // // TODO: test this
+  // // query backend for the uuid of this folder
+  // std::string metadata = get_kvs(backend_address, backend_port, "file_" + username, "metadata.txt");
 
-  // use uuid to get file data
-  std::string file_data = get_kvs(backend_address, backend_port, "file_" + username, uuid);
+  // // parse metadata file for the uuid of the folder
+  // std::string searchable = file_path + ":";
+  // int ind = metadata.find(searchable);
+  // std::string temp = metadata.substr(ind);
+  // int col_ind = temp.find(":");
+  // int end_ind = temp.find("\n");
+  // std::string uuid = temp.substr(col_ind + 1, end_ind - col_ind - 1) + ".txt";
 
-  // parse file_data for actual data 
-  int data_ind = temp.find("data:\n");
-  std::string data = file_data.substr(data_ind + 6);
+  // // use uuid to get file data
+  // std::string file_data = get_kvs(backend_address, backend_port, "file_" + username, uuid);
+  // // TODO: add buffer for when this is really large
+
+  // // parse file_data for actual data
+  // int data_ind = temp.find("data:\n");
+  // std::string data = file_data.substr(data_ind + 6);
 
   // Create response and send HTML
   std::ifstream file(STATICS_LOC + "file.html");
@@ -2101,44 +2142,41 @@ std::tuple<std::string, std::string, std::string> post_file(ReqInitLine *req_ini
     return std::make_tuple(init_response, headers, message_body);
   }
 
-  // parse request for file data 
+  // parse request for file data
   int file_index = body.find("Content-Disposition: form-data; name=\"filename\"");
   std::string temp = body.substr(file_index);
-  // get the file name 
+  // get the file name
   int name_index = temp.find("filename=");
   int end_name_index = temp.find("\r\n");
   std::string file_name = temp.substr(name_index + 10, end_name_index - name_index - 9);
-  // remove end quotation mark on file name 
+  // remove end quotation mark on file name
   int quote_index = file_name.find("\"");
   file_name = file_name.substr(0, quote_index);
 
-  // get important file info 
+  // get important file info
   int content_index = temp.find("Content-Type:");
   temp = temp.substr(content_index);
-  // parse out extraneous info 
-  int extra_index = temp.find("---");
+  // parse out extraneous info
+  int extra_index = temp.find("-----------------------");
   std::string file_info = temp.substr(0, extra_index);
 
-  // get the path name from the url 
+  // get the path name from the url
   std::string file_path = req_init_line->path.substr(7);
 
-  std::string new_file_name = file_path + file_name;
-  fprintf(stderr, "new file name: %s\n", new_file_name.c_str());
+  std::string new_file_name = file_path + "/" + file_name;
 
   // Get user sid cookie value
   std::string sid = cookies["sid"];
-  // get username from cookie 
+  // get username from cookie
   std::string username = usernames[sid];
-  fprintf(stderr, "username: %s\n", username.c_str());
 
   // Ping backend master for backend server address
   std::string backend_address_port = get_backend_address("file_" + username);
   std::string backend_address = backend_address_port.substr(0, backend_address_port.find(":"));
   int backend_port = std::stoi(backend_address_port.substr(backend_address_port.find(":") + 1));
 
-  // open metadata file 
+  // open metadata file
   std::string metadata = get_kvs(backend_address, backend_port, "file_" + username, "metadata.txt");
-  fprintf(stderr, "metadata: %s\n", metadata.c_str());
 
   // parse metadata file for the uuid of the folder
   std::string searchable = file_path + ":";
@@ -2147,47 +2185,55 @@ std::tuple<std::string, std::string, std::string> post_file(ReqInitLine *req_ini
   int col_ind = temp.find(":");
   int end_ind = temp.find("\n");
   std::string uuid = temp.substr(col_ind + 1, end_ind - col_ind - 1) + ".txt";
-  fprintf(stderr, "uuid: %s\n", uuid.c_str());
 
   // use uuid to get folder data
   std::string folder_data = get_kvs(backend_address, backend_port, "file_" + username, uuid);
-  fprintf(stderr, "folder_data: %s\n", folder_data.c_str());
-  
-  // update folder_data string to include new file in children files 
+
+  // update folder_data string to include new file in children files
   int curr_ind = folder_data.find("children_folders:\n");
-  std::string prefolder = folder_data.substr(0, curr_ind); 
+  std::string prefolder = folder_data.substr(0, curr_ind);
   std::string postfolder = folder_data.substr(curr_ind);
-  std::string new_folder_data = prefolder + file_name + "\n" + postfolder; 
-  fprintf(stderr, "new_folder_data: %s\n", new_folder_data.c_str());
+  std::string new_folder_data = prefolder + file_name + "\n" + postfolder;
   // TODO: handle if this doesn't work later
+  // TODO: change to cput
   std::string command = put_kvs(backend_address, backend_port, "file_" + username, uuid, new_folder_data, true, folder_data);
 
-  // now, access next_uuid to get a uuid for this new file 
+  // now, access next_uuid to get a uuid for this new file
   std::string next_uuid = get_kvs(backend_address, backend_port, "file_" + username, "nextid.txt");
   int new_uuid = std::stoi(next_uuid);
   next_uuid = std::to_string(new_uuid + 1);
 
-  //TODO: handle if this doesn't work later
+  // TODO: handle if this doesn't work later
   command = put_kvs(backend_address, backend_port, "file_" + username, "nextid.txt", next_uuid, false, "");
 
-  // now, edit metadata file to contain mapping of file path to this uuid 
+  // now, edit metadata file to contain mapping of file path to this uuid
   std::string new_metadata = metadata + new_file_name + ":" + std::to_string(new_uuid) + "\n";
-  // TODO: handle if this doesn't work later 
+  // TODO: handle if this doesn't work later
+  // TODO: fix this to cput later
   command = put_kvs(backend_address, backend_port, "file_" + username, "metadata.txt", new_metadata, true, metadata);
 
-  // finally, create the new file 
-  command = put_kvs(backend_address, backend_port, "file_" + username, std::to_string(new_uuid) + ".txt", "is_directory:false\nparent:" + uuid +"\ndata:" + file_info, false, "");
+  // create the new file
+  command = put_kvs(backend_address, backend_port, "file_" + username, std::to_string(new_uuid) + ".txt", "is_directory:false\nparent:" + uuid + "\n", false, "");
+
+  // write to new row data of the file
+  backend_address_port = get_backend_address(username + std::to_string(new_uuid) + ".txt");
+  backend_address = backend_address_port.substr(0, backend_address_port.find(":"));
+  backend_port = std::stoi(backend_address_port.substr(backend_address_port.find(":") + 1));
+
+  // write to thing
+  command = put_kvs(backend_address, backend_port, username + std::to_string(new_uuid) + ".txt", "data.txt", file_info, false, "");
 
   std::string message_body = "";
   std::string init_response = req_init_line->version + " 303 Success\r\n";
   std::string headers = "";
-  headers += "Location: /storage\r\n";
+  headers += "Location: /storage" + file_path + "\r\n";
   headers += "Content-Length: 0\r\n"; // Need this header on all post responses
 
   return std::make_tuple(init_response, headers, message_body);
 }
 
-std::tuple<std::string, std::string, std::string> download_file(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers) {
+std::tuple<std::string, std::string, std::string> download_file(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers)
+{
   // Check if user is logged in (auth_token=sid)
   if (req_headers.find("Cookie") == req_headers.end())
   {
@@ -2209,9 +2255,9 @@ std::tuple<std::string, std::string, std::string> download_file(ReqInitLine *req
   }
   // Get user sid cookie value
   std::string sid = cookies["sid"];
-  // get username from cookie 
+  // get username from cookie
   std::string username = usernames[sid];
-  // get the path name from the url 
+  // get the path name from the url
   std::string file_path = req_init_line->path.substr(9);
 
   // Ping backend master for backend server address
@@ -2219,7 +2265,7 @@ std::tuple<std::string, std::string, std::string> download_file(ReqInitLine *req
   std::string backend_address = backend_address_port.substr(0, backend_address_port.find(":"));
   int backend_port = std::stoi(backend_address_port.substr(backend_address_port.find(":") + 1));
 
-  // open metadata file 
+  // open metadata file
   std::string metadata = get_kvs(backend_address, backend_port, "file_" + username, "metadata.txt");
 
   // parse metadata file for the uuid of the file
@@ -2230,16 +2276,26 @@ std::tuple<std::string, std::string, std::string> download_file(ReqInitLine *req
   int end_ind = temp.find("\n");
   std::string uuid = temp.substr(col_ind + 1, end_ind - col_ind - 1) + ".txt";
 
-  // open file
-  std::string file_data = get_kvs(backend_address, backend_port, "file_" + username, uuid);
-  // parse file for data
-  int data_index = file_data.find("data:");
-  file_data = file_data.substr(data_index + 5);
-  fprintf(stderr, "file_data: %s\n", file_data.c_str());
+  // open file data
+  backend_address_port = get_backend_address(username + uuid);
+  backend_address = backend_address_port.substr(0, backend_address_port.find(":"));
+  backend_port = std::stoi(backend_address_port.substr(backend_address_port.find(":") + 1));
+
+  std::string file_data = get_kvs(backend_address, backend_port, username + uuid, "data.txt");
+
+  // // open file
+  // std::string file_data = get_kvs(backend_address, backend_port, "file_" + username, uuid);
+  // // parse file for data
+  // int data_index = file_data.find("data:");
+  // file_data = file_data.substr(data_index + 5);
+  // std::cout << "File data as hex: " << std::endl;
+  // for (char c : file_data)
+  // {
+  //   std::cout << std::hex << std::setw(2) << std::setfill('0') << (int)(unsigned char)c << " ";
+  // }
 
   int last_index = file_path.find_last_of("/");
   std::string file_name = file_path.substr(last_index + 1);
-  fprintf(stderr, "file_name: %s\n", file_name.c_str());
 
   std::string message_body = "";
   std::string init_response = req_init_line->version + " 200 OK\r\n";
@@ -2250,16 +2306,545 @@ std::tuple<std::string, std::string, std::string> download_file(ReqInitLine *req
   std::string next_header = file_data.substr(0, split_ind);
   std::string data = file_data.substr(split_ind + 4);
   // get rid of any extra \r\n's
-  int cut_ind = data.find("\r\n");
-  data = data.substr(0, cut_ind);
+  // int cut_ind = data.find("\r\n");
+  // data = data.substr(0, cut_ind);
+  data.pop_back();
+  data.pop_back();
 
   headers += "Content-Length: " + std::to_string(data.length()) + "\r\n";
   headers += next_header + "\r\n";
   // headers += "Content-Type: application/octet-stream\r\n";
   headers += "Date: Mon, 29 Apr 2024 22:14:46 GMT\r\n";
   message_body = data;
-  fprintf(stderr, "data: %s", data.c_str());
 
   return std::make_tuple(init_response, headers, message_body);
 }
 
+// TODO: add handling for when someone tries to delete "/" folder or smth
+std::tuple<std::string, std::string, std::string> post_folder(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body)
+{
+  // Check if user is logged in (auth_token=sid)
+  if (req_headers.find("Cookie") == req_headers.end())
+  {
+    std::string init_response = req_init_line->version + " 401 Unauthorized\r\n";
+    std::string message_body = "You must be logged in to view this page.";
+    std::string headers = "";
+    headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
+    return std::make_tuple(init_response, headers, message_body);
+  }
+
+  std::unordered_map<std::string, std::string> cookies = parse_cookies(req_headers["Cookie"]);
+  if (cookies.find("auth_token") == cookies.end() || cookies["auth_token"] != cookies["sid"])
+  {
+    std::string init_response = req_init_line->version + " 401 Unauthorized\r\n";
+    std::string message_body = "You must be logged in to view this page.";
+    std::string headers = "";
+    headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
+    return std::make_tuple(init_response, headers, message_body);
+  }
+
+  // parse request for folder data
+
+  std::unordered_map<std::string, std::string> body_map = parse_post_body_url_encoded(body);
+  // get the folder name
+  std::string folder_name = body_map["name"];
+
+  fprintf(stderr, "%s\n", folder_name.c_str());
+
+  // get the path name from the url
+  std::string file_path = req_init_line->path.substr(11);
+  fprintf(stderr, "%s\n", file_path.c_str());
+
+  std::string new_folder_name = file_path + "/" + folder_name;
+
+  // Get user sid cookie value
+  std::string sid = cookies["sid"];
+  // get username from cookie
+  std::string username = usernames[sid];
+
+  // Ping backend master for backend server address
+  std::string backend_address_port = get_backend_address("file_" + username);
+  std::string backend_address = backend_address_port.substr(0, backend_address_port.find(":"));
+  int backend_port = std::stoi(backend_address_port.substr(backend_address_port.find(":") + 1));
+
+  // open metadata file
+  std::string metadata = get_kvs(backend_address, backend_port, "file_" + username, "metadata.txt");
+
+  // parse metadata file for the uuid of the folder
+  std::string searchable = file_path + ":";
+  int ind = metadata.find(searchable);
+  std::string temp = metadata.substr(ind);
+  int col_ind = temp.find(":");
+  int end_ind = temp.find("\n");
+  std::string uuid = temp.substr(col_ind + 1, end_ind - col_ind - 1) + ".txt";
+
+  // use uuid to get folder data
+  std::string folder_data = get_kvs(backend_address, backend_port, "file_" + username, uuid);
+
+  // update folder_data string to include new file in children folders
+  std::string new_folder_data = folder_data + folder_name + "\n";
+  // TODO: handle if this doesn't work later
+  std::string command = put_kvs(backend_address, backend_port, "file_" + username, uuid, new_folder_data, true, folder_data);
+
+  // now, access next_uuid to get a uuid for this new folder
+  std::string next_uuid = get_kvs(backend_address, backend_port, "file_" + username, "nextid.txt");
+  int new_uuid = std::stoi(next_uuid);
+  next_uuid = std::to_string(new_uuid + 1);
+
+  // TODO: handle if this doesn't work later
+  command = put_kvs(backend_address, backend_port, "file_" + username, "nextid.txt", next_uuid, false, "");
+
+  // now, edit metadata file to contain mapping of file path to this uuid
+  std::string new_metadata = metadata + new_folder_name + ":" + std::to_string(new_uuid) + "\n";
+  // TODO: handle if this doesn't work later
+  command = put_kvs(backend_address, backend_port, "file_" + username, "metadata.txt", new_metadata, true, metadata);
+
+  // finally, create the new file
+  command = put_kvs(backend_address, backend_port, "file_" + username, std::to_string(new_uuid) + ".txt", "is_directory:true\nparent:" + uuid + "\nchildren_files:\nchildren_folders:\n", false, "");
+
+  std::string message_body = "";
+  std::string init_response = req_init_line->version + " 303 Success\r\n";
+  std::string headers = "";
+  headers += "Location: /storage" + file_path + "\r\n";
+  headers += "Content-Length: 0\r\n"; // Need this header on all post responses
+
+  return std::make_tuple(init_response, headers, message_body);
+}
+
+std::tuple<std::string, std::string, std::string> delete_file(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body)
+{
+  // Check if user is logged in (auth_token=sid)
+  if (req_headers.find("Cookie") == req_headers.end())
+  {
+    std::string init_response = req_init_line->version + " 401 Unauthorized\r\n";
+    std::string message_body = "You must be logged in to view this page.";
+    std::string headers = "";
+    headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
+    return std::make_tuple(init_response, headers, message_body);
+  }
+
+  std::unordered_map<std::string, std::string> cookies = parse_cookies(req_headers["Cookie"]);
+  if (cookies.find("auth_token") == cookies.end() || cookies["auth_token"] != cookies["sid"])
+  {
+    std::string init_response = req_init_line->version + " 401 Unauthorized\r\n";
+    std::string message_body = "You must be logged in to view this page.";
+    std::string headers = "";
+    headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
+    return std::make_tuple(init_response, headers, message_body);
+  }
+
+  // get the path name from the url
+  std::string file_path = req_init_line->path.substr(7);
+  fprintf(stderr, "file_path: %s\n", file_path.c_str());
+
+  // Get user sid cookie value
+  std::string sid = cookies["sid"];
+  // get username from cookie
+  std::string username = usernames[sid];
+
+  // Ping backend master for backend server address
+  std::string backend_address_port = get_backend_address("file_" + username);
+  std::string backend_address = backend_address_port.substr(0, backend_address_port.find(":"));
+  int backend_port = std::stoi(backend_address_port.substr(backend_address_port.find(":") + 1));
+
+  // open metadata file
+  std::string metadata = get_kvs(backend_address, backend_port, "file_" + username, "metadata.txt");
+  fprintf(stderr, "in metadata\n");
+
+  // find the data entry for this value specifically in metadata
+  int next_ind = metadata.find("\n" + file_path + ":");
+  std::string pre_meta = metadata.substr(0, next_ind + 1);
+  std::string post_meta = metadata.substr(next_ind + 1);
+  int del_ind = post_meta.find("\n");
+  std::string new_meta = pre_meta + post_meta.substr(del_ind + 1);
+
+  // write new metadata file
+  std::string command = put_kvs(backend_address, backend_port, "file_" + username, "metadata.txt", new_meta, true, metadata);
+  metadata = new_meta;
+  fprintf(stderr, "post metadata\n");
+
+  // find the uuid of the file
+  int colon_ind = post_meta.find(":");
+  std::string uuid = post_meta.substr(colon_ind + 1);
+  int end_ind = uuid.find("\n");
+  uuid = uuid.substr(0, end_ind);
+
+  // open the data for this file
+  std::string file_data = get_kvs(backend_address, backend_port, "file_" + username, uuid + ".txt");
+  // find parent uuid
+  int parent_ind = file_data.find("parent:");
+  std::string parent_uuid = file_data.substr(parent_ind + 7);
+  end_ind = parent_uuid.find("\n");
+  parent_uuid = parent_uuid.substr(0, end_ind);
+
+  // open the data for the parent uuid
+  std::string parent_data = get_kvs(backend_address, backend_port, "file_" + username, parent_uuid);
+
+  // find name of thing to be deleted
+  int dash_ind = file_path.find_last_of('/');
+  std::string file_name = file_path.substr(dash_ind + 1);
+
+  int to_delete = parent_data.find("\n" + file_name + "\n");
+  std::string new_parent_data = parent_data.substr(0, to_delete + 1) + parent_data.substr(to_delete + file_name.length() + 2);
+
+  // write new parent file
+  command = put_kvs(backend_address, backend_port, "file_" + username, parent_uuid, new_parent_data, true, parent_data);
+
+  // delete uuid file
+  command = delete_kvs(backend_address, backend_port, "file_" + username, uuid + ".txt");
+
+  // delete data of file
+  std::string data_backend_address_port = get_backend_address(username + uuid + ".txt");
+  std::string data_backend_address = data_backend_address_port.substr(0, data_backend_address_port.find(":"));
+  int data_backend_port = std::stoi(data_backend_address_port.substr(data_backend_address_port.find(":") + 1));
+
+  command = delete_kvs(data_backend_address, data_backend_port, username + uuid + ".txt", "data.txt");
+
+  // while something exists in the metadata that is a child of this path, delete it
+  next_ind = metadata.find("\n" + file_path + "/");
+  while (next_ind != std::string::npos)
+  {
+    pre_meta = metadata.substr(0, next_ind + 1);
+    post_meta = metadata.substr(next_ind + 1);
+    del_ind = post_meta.find("\n");
+    new_meta = pre_meta + post_meta.substr(del_ind + 1);
+
+    // write new metadata file
+    command = put_kvs(backend_address, backend_port, "file_" + username, "metadata.txt", new_meta, true, metadata);
+    metadata = new_meta;
+
+    // find the uuid of the file
+    colon_ind = post_meta.find(":");
+    uuid = post_meta.substr(colon_ind + 1);
+    end_ind = uuid.find("\n");
+    uuid = uuid.substr(0, end_ind);
+
+    // delete this uuid
+    command = delete_kvs(backend_address, backend_port, "file_" + username, uuid + ".txt");
+    next_ind = metadata.find("\n" + file_path + "/");
+
+    data_backend_address_port = get_backend_address(username + uuid + ".txt");
+    data_backend_address = data_backend_address_port.substr(0, data_backend_address_port.find(":"));
+    data_backend_port = std::stoi(data_backend_address_port.substr(data_backend_address_port.find(":") + 1));
+
+    command = delete_kvs(data_backend_address, data_backend_port, username + uuid + ".txt", "data.txt");
+  }
+
+  std::string message_body = "";
+  std::string init_response = req_init_line->version + " 303 Success\r\n";
+  std::string headers = "";
+  headers += "Location: /storage\r\n";
+  headers += "Content-Length: 0\r\n"; // Need this header on all post responses
+
+  return std::make_tuple(init_response, headers, message_body);
+}
+
+std::tuple<std::string, std::string, std::string> rename_file(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body)
+{
+  // Check if user is logged in (auth_token=sid)
+  if (req_headers.find("Cookie") == req_headers.end())
+  {
+    std::string init_response = req_init_line->version + " 401 Unauthorized\r\n";
+    std::string message_body = "You must be logged in to view this page.";
+    std::string headers = "";
+    headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
+    return std::make_tuple(init_response, headers, message_body);
+  }
+
+  std::unordered_map<std::string, std::string> cookies = parse_cookies(req_headers["Cookie"]);
+  if (cookies.find("auth_token") == cookies.end() || cookies["auth_token"] != cookies["sid"])
+  {
+    std::string init_response = req_init_line->version + " 401 Unauthorized\r\n";
+    std::string message_body = "You must be logged in to view this page.";
+    std::string headers = "";
+    headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
+    return std::make_tuple(init_response, headers, message_body);
+  }
+  // get the new name from the body
+  std::unordered_map<std::string, std::string> body_map = parse_post_body_url_encoded(body);
+  // get the folder name
+  std::string new_name = body_map["name"];
+
+  // get the path name from the url
+  std::string file_path = req_init_line->path.substr(7);
+  fprintf(stderr, "file_path: %s\n", file_path.c_str());
+
+  // find name of thing to be renamed
+  int dash_ind = file_path.find_last_of('/');
+  std::string file_name = file_path.substr(dash_ind + 1);
+  int dot_ind = file_name.find(".");
+  std::string extension = "";
+  if (dot_ind != std::string::npos)
+  {
+    extension = file_name.substr(dot_ind);
+  }
+  std::string new_path = file_path.substr(0, dash_ind + 1) + new_name + extension;
+
+  // Get user sid cookie value
+  std::string sid = cookies["sid"];
+  // get username from cookie
+  std::string username = usernames[sid];
+
+  // Ping backend master for backend server address
+  std::string backend_address_port = get_backend_address("file_" + username);
+  std::string backend_address = backend_address_port.substr(0, backend_address_port.find(":"));
+  int backend_port = std::stoi(backend_address_port.substr(backend_address_port.find(":") + 1));
+
+  // open metadata file
+  std::string metadata = get_kvs(backend_address, backend_port, "file_" + username, "metadata.txt");
+
+  // find the data entry for this value specifically in metadata
+  int next_ind = metadata.find("\n" + file_path + ":");
+  std::string pre_meta = metadata.substr(0, next_ind + 1);
+  std::string post_meta = metadata.substr(next_ind + 1);
+  int del_ind = post_meta.find(":");
+  std::string new_meta = pre_meta + new_path + post_meta.substr(del_ind);
+
+  // write new metadata file
+  std::string command = put_kvs(backend_address, backend_port, "file_" + username, "metadata.txt", new_meta, true, metadata);
+  metadata = new_meta;
+  fprintf(stderr, "post metadata\n");
+
+  // find the uuid of the file
+  int colon_ind = post_meta.find(":");
+  std::string uuid = post_meta.substr(colon_ind + 1);
+  int end_ind = uuid.find("\n");
+  uuid = uuid.substr(0, end_ind);
+
+  // open the data for this file
+  std::string file_data = get_kvs(backend_address, backend_port, "file_" + username, uuid + ".txt");
+  // find parent uuid
+  int parent_ind = file_data.find("parent:");
+  std::string parent_uuid = file_data.substr(parent_ind + 7);
+  end_ind = parent_uuid.find("\n");
+  parent_uuid = parent_uuid.substr(0, end_ind);
+
+  // open the data for the parent uuid
+  std::string parent_data = get_kvs(backend_address, backend_port, "file_" + username, parent_uuid);
+
+  int to_delete = parent_data.find("\n" + file_name + "\n");
+  if (to_delete != std::string::npos)
+  {
+    std::string new_parent_data = parent_data.substr(0, to_delete + 1) + new_name + extension + "\n" + parent_data.substr(to_delete + file_name.length() + 2);
+
+    // write new parent file
+    command = put_kvs(backend_address, backend_port, "file_" + username, parent_uuid, new_parent_data, true, parent_data);
+  }
+
+  // while something exists in the metadata that is a child of this path, rename it
+  next_ind = metadata.find("\n" + file_path + "/");
+  while (next_ind != std::string::npos)
+  {
+    new_meta = metadata;
+    new_meta.replace(next_ind, file_path.length() + 1, "\n" + new_path);
+
+    // write new metadata file
+    command = put_kvs(backend_address, backend_port, "file_" + username, "metadata.txt", new_meta, true, metadata);
+    metadata = new_meta;
+
+    next_ind = metadata.find("\n" + file_path + "/");
+  }
+
+  std::string message_body = "";
+  std::string init_response = req_init_line->version + " 303 Success\r\n";
+  std::string headers = "";
+  headers += "Location: /storage\r\n";
+  headers += "Content-Length: 0\r\n"; // Need this header on all post responses
+
+  return std::make_tuple(init_response, headers, message_body);
+}
+
+std::tuple<std::string, std::string, std::string> move_file(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body)
+{
+  // Check if user is logged in (auth_token=sid)
+  if (req_headers.find("Cookie") == req_headers.end())
+  {
+    std::string init_response = req_init_line->version + " 401 Unauthorized\r\n";
+    std::string message_body = "You must be logged in to view this page.";
+    std::string headers = "";
+    headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
+    return std::make_tuple(init_response, headers, message_body);
+  }
+
+  std::unordered_map<std::string, std::string> cookies = parse_cookies(req_headers["Cookie"]);
+  if (cookies.find("auth_token") == cookies.end() || cookies["auth_token"] != cookies["sid"])
+  {
+    std::string init_response = req_init_line->version + " 401 Unauthorized\r\n";
+    std::string message_body = "You must be logged in to view this page.";
+    std::string headers = "";
+    headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
+    return std::make_tuple(init_response, headers, message_body);
+  }
+  // get the new route from the body
+  std::unordered_map<std::string, std::string> body_map = parse_post_body_url_encoded(body);
+  // get the folder name
+  std::string new_parent = body_map["dest"];
+  int repl_val = new_parent.find("%2F");
+  while (repl_val != std::string::npos)
+  {
+    new_parent.replace(repl_val, 3, "/");
+    repl_val = new_parent.find("%2F");
+  }
+
+  // get the path name from the url
+  std::string file_path = req_init_line->path.substr(5);
+
+  // find name of thing to be moved
+  int dash_ind = file_path.find_last_of('/');
+  std::string file_name = file_path.substr(dash_ind + 1);
+  int dot_ind = file_name.find(".");
+  std::string extension = "";
+  if (dot_ind != std::string::npos)
+  {
+    extension = file_name.substr(dot_ind);
+  }
+  std::string new_path;
+  if (new_parent == "/")
+  {
+    new_path = new_parent + file_name;
+  }
+  else
+  {
+    new_path = new_parent + "/" + file_name;
+  }
+
+  // Get user sid cookie value
+  std::string sid = cookies["sid"];
+  // get username from cookie
+  std::string username = usernames[sid];
+
+  // Ping backend master for backend server address
+  std::string backend_address_port = get_backend_address("file_" + username);
+  std::string backend_address = backend_address_port.substr(0, backend_address_port.find(":"));
+  int backend_port = std::stoi(backend_address_port.substr(backend_address_port.find(":") + 1));
+
+  // open metadata file
+  std::string metadata = get_kvs(backend_address, backend_port, "file_" + username, "metadata.txt");
+
+  // find the uuid for the new parent
+  int par_int;
+  if (new_parent == "/")
+  {
+    par_int = metadata.find(new_parent + ":");
+  }
+  else
+  {
+    par_int = metadata.find("\n" + new_parent + ":");
+  }
+  if (par_int == std::string::npos)
+  {
+    // specified file path doesn't exist!
+    std::string message_body = "";
+    std::string init_response = req_init_line->version + " 308 Invalid Path\r\n";
+    std::string headers = "";
+    headers += "Location: /invalidpath\r\n";
+    headers += "Content-Length: 0\r\n"; // Need this header on all post responses
+
+    return std::make_tuple(init_response, headers, message_body);
+  }
+  else
+  {
+    // find the data entry for this value specifically in metadata
+    int next_ind = metadata.find("\n" + file_path + ":");
+    std::string pre_meta = metadata.substr(0, next_ind + 1);
+    std::string post_meta = metadata.substr(next_ind + 1);
+    int del_ind = post_meta.find(":");
+    std::string new_meta = pre_meta + new_path + post_meta.substr(del_ind);
+
+    // write new metadata file
+    std::string command = put_kvs(backend_address, backend_port, "file_" + username, "metadata.txt", new_meta, true, metadata);
+    metadata = new_meta;
+
+    // find the uuid of this file
+    int colon_ind = post_meta.find(":");
+    std::string uuid = post_meta.substr(colon_ind + 1);
+    int end_ind = uuid.find("\n");
+    uuid = uuid.substr(0, end_ind);
+    fprintf(stderr, "got uuid");
+
+    post_meta = metadata.substr(par_int + 1);
+    colon_ind = post_meta.find(":");
+    std::string new_parent_uuid = post_meta.substr(colon_ind + 1);
+    end_ind = new_parent_uuid.find("\n");
+    new_parent_uuid = new_parent_uuid.substr(0, end_ind);
+    fprintf(stderr, "got parent uuid %s\n", new_parent_uuid.c_str());
+
+    // open the data for this file
+    std::string file_data = get_kvs(backend_address, backend_port, "file_" + username, uuid + ".txt");
+
+    // find whether this is a directory or a file
+    int is_directory_ind = file_data.find("is_directory:");
+    std::string file_is_directory = file_data.substr(is_directory_ind + 13);
+    end_ind = file_is_directory.find("\n");
+    file_is_directory = file_is_directory.substr(0, end_ind);
+    fprintf(stderr, "got is_directory");
+
+    // find parent uuid
+    int parent_ind = file_data.find("parent:");
+    std::string pre_parent = file_data.substr(0, parent_ind + 7);
+    std::string post_parent = file_data.substr(parent_ind + 7);
+    end_ind = post_parent.find("\n");
+    std::string parent_uuid = post_parent.substr(0, end_ind);
+    std::string rest_of_file = post_parent.substr(end_ind);
+    std::string new_file_value = pre_parent + new_parent_uuid + ".txt" + rest_of_file;
+    fprintf(stderr, "got old parent id");
+
+    // write new_file_value
+    command = put_kvs(backend_address, backend_port, "file_" + username, uuid + ".txt", new_file_value, false, "");
+
+    // open the data for the old parent uuid
+    std::string parent_data = get_kvs(backend_address, backend_port, "file_" + username, parent_uuid);
+
+    // delete this file from children of old parent
+    int to_delete = parent_data.find("\n" + file_name + "\n");
+    std::string new_parent_data = parent_data.substr(0, to_delete + 1) + parent_data.substr(to_delete + file_name.length() + 2);
+
+    // write new parent data
+    command = put_kvs(backend_address, backend_port, "file_" + username, parent_uuid, new_parent_data, true, parent_data);
+
+    // open the data for the new parent uuid
+    parent_data = get_kvs(backend_address, backend_port, "file_" + username, new_parent_uuid + ".txt");
+    fprintf(stderr, "parent_data %s\n", parent_data.c_str());
+
+    std::string new_parent_value = "";
+
+    // add this value to the children field of the parent
+    if (file_is_directory == "true")
+    {
+      new_parent_value = parent_data + file_name + "\n";
+    }
+    else
+    {
+      int curr_ind = parent_data.find("children_folders:\n");
+      std::string prefolder = parent_data.substr(0, curr_ind);
+      std::string postfolder = parent_data.substr(curr_ind);
+      new_parent_value = prefolder + file_name + "\n" + postfolder;
+      fprintf(stderr, "new value: %s\n", new_parent_value.c_str());
+    }
+    // write new value to new parent
+    command = put_kvs(backend_address, backend_port, "file_" + username, new_parent_uuid + ".txt", new_parent_value, false, "");
+    fprintf(stderr, "writing to new parent");
+
+    // while something exists in the metadata that is a child of this path, rename it
+    next_ind = metadata.find("\n" + file_path + "/");
+    while (next_ind != std::string::npos)
+    {
+      new_meta = metadata;
+      new_meta.replace(next_ind, file_path.length() + 1, "\n" + new_path);
+
+      // write new metadata file
+      command = put_kvs(backend_address, backend_port, "file_" + username, "metadata.txt", new_meta, true, metadata);
+      metadata = new_meta;
+
+      next_ind = metadata.find("\n" + file_path + "/");
+    }
+
+    std::string message_body = "";
+    std::string init_response = req_init_line->version + " 303 Success\r\n";
+    std::string headers = "";
+    headers += "Location: /storage\r\n";
+    headers += "Content-Length: 0\r\n"; // Need this header on all post responses
+
+    return std::make_tuple(init_response, headers, message_body);
+  }
+}
