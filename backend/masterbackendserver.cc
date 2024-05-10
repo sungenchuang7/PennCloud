@@ -74,6 +74,7 @@ std::map<std::string, bool> server_status_map;
 std::map<int, std::vector<std::string>> tablet_storage_map;
 std::map<int, std::string> group_primary_map;  // this keeps track of the current primary node of each replication group <group_no, primary_serverID>
 std::map<std::string, int> serverID_group_map; // given a serverID, this map tells you which replication group this server is in
+std::unordered_set<std::string> pseudo_killed_nodes;
 // std::unordered_set<std::string> down_servers;
 // std::map<int, std::map<int, std::vector<std::string>>> tablet_storage_map;
 std::vector<std::string> config_serverIDs; // server IDs (address + port) read from config file
@@ -568,7 +569,9 @@ bool write_helper(int socket_fd, std::string msg)
     size_t bytes_left_to_write = total_bytes_to_write;
     while (bytes_written_so_far != total_bytes_to_write)
     {
+        std::cerr << "(write_helper) trying to write: " << msg << std::endl;
         ssize_t write_result = write(socket_fd, msg.c_str() + bytes_written_so_far, bytes_left_to_write);
+        std::cerr << "(write_helper) written!" << std::endl;
         if (shut_down_flag)
         {
             return false;
@@ -738,7 +741,7 @@ void *heartbeat_thread_func(void *arg)
     sigaddset(&set, SIGINT);
     if (pthread_sigmask(SIG_BLOCK, &set, NULL) != 0)
     {
-        std::cerr << "pthread_sigmask() failed..." << std::endl;
+        std::cerr << "(heartbeat) pthread_sigmask() failed..." << std::endl;
         return NULL;
     }
 
@@ -762,17 +765,17 @@ void *heartbeat_thread_func(void *arg)
 
         if (inet_pton(AF_INET, storage_node_address.c_str(), &serv_addr.sin_addr) <= 0)
         {
-            std::cerr << "Invalid address / Address not supported\n";
+            std::cerr << "(heartbeat) Invalid address / Address not supported\n";
             return nullptr;
         }
 
         if ((sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
         {
-            std::cerr << "Socket creation error\n";
+            std::cerr << "(heartbeat) Socket creation error\n";
             return nullptr;
         }
 
-        std::cerr << "SOCKFD:" << sockfd << std::endl;
+        // std::cerr << "SOCKFD:" << sockfd << std::endl;
 
         // update the valid sockfd associated with this thread's tid
         pthread_mutex_lock(&heartbeat_tid_socket_mutex);
@@ -784,8 +787,8 @@ void *heartbeat_thread_func(void *arg)
             update_server_status_map_and_group_primary_map(server_key);
             if (debug_mode)
             {
-                perror("Errno: ");
-                std::cerr << "Unable to connect to " << server_key << std::endl;
+                perror("(heartbeat) Errno: ");
+                std::cerr << "(heartbeat) Unable to connect to " << server_key << std::endl;
             }
             close(sockfd);
             continue;
@@ -809,7 +812,7 @@ void *heartbeat_thread_func(void *arg)
         std::string expected_welcome_message = "+OK Server ready\r\n";
         if (actual_welcome_message != expected_welcome_message)
         {
-            std::cerr << "Warning: actual_welcome_message != expected_welcome_message" << std::endl;
+            std::cerr << "(heartbeat) Warning: actual_welcome_message != expected_welcome_message" << std::endl;
         }
 
         bool is_alive = (result > 0);
@@ -835,17 +838,17 @@ void *heartbeat_thread_func(void *arg)
                 {
                     if (actual_quit_response != expected_quit_response)
                     {
-                        std::cerr << "Warning: actual_quit_response != expected_quit_response" << std::endl;
+                        std::cerr << "(heartbeat) Warning: actual_quit_response != expected_quit_response" << std::endl;
                     }
-                    std::cerr << "actual_quit_response: " << actual_quit_response << std::endl;
+                    std::cerr << "(heartbeat) actual_quit_response: " << actual_quit_response << std::endl;
                 }
                 else if (result == 0)
                 {
-                    printf("Connection closed by peer\n");
+                    printf("(heartbeat) Connection closed by peer\n");
                 }
                 else
                 {
-                    printf("Error reading from socket\n");
+                    printf("(heartbeat) Error reading from socket\n");
                 }
             }
             // free(quit_response);
@@ -854,11 +857,11 @@ void *heartbeat_thread_func(void *arg)
         {
             if (is_alive)
             {
-                std::cout << server_key << " is alive!" << std::endl;
+                std::cerr << "(heartbeat) " << server_key << " is alive!" << std::endl;
             }
             else
             {
-                std::cout << server_key << " is dead!" << std::endl;
+                std::cerr << "(heartbeat) " << server_key << " is dead!" << std::endl;
             }
         }
 
@@ -1061,19 +1064,19 @@ bool create_socket_send_helper(std::string serverID, std::string message, std::s
 
     if (inet_pton(AF_INET, storage_node_address.c_str(), &serv_addr.sin_addr) <= 0)
     {
-        std::cerr << "Invalid address / Address not supported\n";
+        std::cerr << "(cssh) Invalid address / Address not supported\n";
         return false;
     }
 
     if ((sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
     {
-        std::cerr << "Socket creation error\n";
+        std::cerr << "(cssh) Socket creation error\n";
         return false;
     }
 
     if (connect(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0)
     {
-        std::cerr << "Unable to connect to serverID" << std::endl;
+        std::cerr << "(cssh) Unable to connect to serverID" << std::endl;
         return false;
     }
 
@@ -1082,24 +1085,24 @@ bool create_socket_send_helper(std::string serverID, std::string message, std::s
     std::string actual_welcome_message{welcome_message_buffer};
     std::string expected_welcome_message = "+OK Server ready\r\n";
 
-    std::cout << "actual_welcome_message: " << actual_welcome_message << std::endl;
+    std::cerr << "(cssh) actual_welcome_message: " << actual_welcome_message << std::endl;
 
     if (actual_welcome_message != expected_welcome_message)
     {
-        std::cerr << "possible network partition" << std::endl;
+        std::cerr << "(cssh) possible network partition" << std::endl;
         return false;
     }
 
     if (!write_helper(sockfd, message))
     {
-        std::cerr << "unable to write to destination server" << std::endl;
+        std::cerr << "(cssh) unable to write to destination server" << std::endl;
         return false;
     }
 
     char *buffer;
     read_until_crlf(sockfd, &buffer);
     std::string actual_server_response{buffer};
-    std::cout << "actual_server_response: " << actual_server_response << std::endl;
+    std::cout << "(cssh) actual_server_response: " << actual_server_response << std::endl;
     close(sockfd);
     if (expected_server_response == actual_server_response)
     {
@@ -1107,7 +1110,7 @@ bool create_socket_send_helper(std::string serverID, std::string message, std::s
     }
     else
     {
-        std::cerr << "server response not expected" << std::endl;
+        std::cerr << "(cssh) server response not expected" << std::endl;
         return false;
     }
 }
@@ -1153,6 +1156,8 @@ bool send_PRIM(int group_no)
     std::string alive_servers_string = get_alive_servers_string(group_no);
     std::string PRIM_message = "PRIM:" + alive_servers_string + "\r\n";
     std::string expected_response = "+OK Primary updated\r\n";
+
+    std::cerr << "send_PRIM here?" << std::endl;
 
     return create_socket_send_helper(group_primary_map.at(group_no), PRIM_message, expected_response);
 }
@@ -1252,8 +1257,19 @@ void GTPM_handler(std::string command, int socket_fd)
     }
     std::cout << "here2" << std::endl;
     int server_group_no = serverID_group_map.at(serverID_to_lookup);
-    std::string primaryID = group_primary_map.at(server_group_no);
-    response += "+OK " + primaryID + "\r\n";
+    ////
+    if (group_primary_map.at(server_group_no) == "all_dead")
+    {
+        std::cerr << "did we reach2" << std::endl;
+        response = "-ERR all servers are down at the moment\r\n";
+    }
+    else
+    {
+        std::string primaryID = group_primary_map.at(server_group_no);
+        response += "+OK " + primaryID + "\r\n";
+    }
+    ////
+
     write_helper(socket_fd, response);
     verbose_print_helper_server(socket_fd, response);
 }
@@ -1350,6 +1366,8 @@ void KILL_handler(std::string command, int socket_fd)
     std::string expected_response = "+OK shutting down\r\n";
     if (create_socket_send_helper(serverID_to_shutdown, message_to_send, expected_response))
     {
+        pseudo_killed_nodes.insert(serverID_to_shutdown);
+        std::cerr << "(KILL handler) +OK shutting down received" << std::endl;
         response = "+OK storage server shutdown requested\r\n";
         write_helper(socket_fd, response);
         verbose_print_helper_server(socket_fd, response);
@@ -1404,5 +1422,5 @@ void QUIT_handler(int socket_fd, bool &quit_received)
     std::string response = "+OK Goodbye!\r\n";
     write_helper(socket_fd, response);
     verbose_print_helper_server(socket_fd, response);
-    quit_received = true; 
+    quit_received = true;
 }
