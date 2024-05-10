@@ -72,10 +72,13 @@
             -->
         </table>
         <h2>Web Storage Data</h2>
-
+        <ul id="key-value-list">
+            <!-- kv pairs-->
+        </ul>
+        <p id="bytes"></p>
     </div>
     <script>
-        // const server list will be added here with c++ code
+        // server list will be added here with c++ code
         // EXAMPLE:
         // const backend_servers = [
         //     { server_address: "127.0.0.1:20011", status: "Alive"},
@@ -88,6 +91,44 @@
         //     { server_address: "127.0.0.1:8081", status: "Alive", num_connections: 2},
         //     { server_address: "127.0.0.1:8082", status: "Alive", num_connections: 3},
         // ];
+
+        // const kv_pairs = [
+        //     { rowkey: "key1", columnkey: "column1" },
+        //     { rowkey: "key2", columnkey: "column2" },
+        // ];
+
+        function displayBytes(rowkey, columnkey) {
+            console.log('Getting bytes for ' + rowkey + "," + columnkey);
+            const bodyData = "rowkey=" + rowkey + "&columnkey=" + columnkey + "&";
+            const options = {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'text/plain'
+                },
+                body: bodyData
+            };
+
+            fetch('/get_kvs_data', options)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Was unable to get key value data for ' + rowkey + "," + columnkey);
+                    }
+                    return response;
+                })
+                .then(data => {
+                    console.log('POST request successful', data);
+                    return data.text();
+                })
+                .then(text => {
+                    console.log('Bytes for ' + rowkey + "," + columnkey, text);
+                    document.getElementById('bytes').innerText = text;
+                })
+                .catch(error => {
+                    console.error('There was a problem with the POST request:', error);
+                    alert(error);
+                });
+        }
+
         function displayServers() {
             // Write in server information
             const backendTable = document.getElementById('backendTable');
@@ -181,6 +222,30 @@
 
                 });
             }
+
+            // Write in key value pairs for each replication group
+            const kv_pairs_ele = document.getElementById('key-value-list');
+
+            kv_pairs.forEach(kv_pair => {
+                const listItem = document.createElement('li');
+                const button = document.createElement('button');
+
+                button.setAttribute('data-rowkey', kv_pair.rowkey);
+                button.setAttribute('data-columnkey', kv_pair.columnkey);
+
+                button.className = 'bytes-button';
+                button.textContent = `${kv_pair.rowkey}, ${kv_pair.columnkey}`;
+
+                button.addEventListener('click', function () {
+                    const rowkey = this.getAttribute('data-rowkey');
+                    const columnkey = this.getAttribute('data-columnkey');
+                    displayBytes(rowkey, columnkey);
+                });
+
+                listItem.appendChild(button);
+                kv_pairs_ele.appendChild(listItem);
+            });
+
 
             var modal = document.getElementById("modal");
             window.onclick = function (event) {
