@@ -49,6 +49,7 @@ std::string valueAdded = "+OK Value added\r\n";
 std::string dataOkay = "+OK Enter value ending with <CRLF>.<CRLF>\r\n";
 std::string secondValueOkay = "+OK Enter second value with DATA\r\n";
 std::string firstValueInvalid = "-ERR Value does not equal current value\r\n";
+std::string primMessage = "+OK Primary updated\r\n";
 std::string stdnResponse = "+OK shutting down\r\n";
 std::string rsttResponse = "+OK recovering\r\n";
 
@@ -1275,7 +1276,11 @@ void* workerThread(void* connectionInfo) {
 
                                 pthread_mutex_unlock(&primaryUpdateLock);
 
-                                fprintf(stderr, "[Current Primary: %s] Storage server down. Currently active nodes: %s\n", ipPorts[myIndex].data(), primArgument.data());
+                                if (write(comm_FD, &primMessage[0], primMessage.length()) < 0) {
+                                    fprintf(stderr, "REMV failed to write: %s\n", strerror(errno));
+                                }
+
+                                fprintf(stderr, "[Current Primary: %s] Storage server statuses updated - currently active nodes: %s\n", ipPorts[myIndex].data(), primArgument.data());
                             } else if ((buf[0] == 's' || buf[0] == 'S') && 
                                     (buf[1] == 't' || buf[1] == 'T') && 
                                     (buf[2] == 'd' || buf[2] == 'D') &&
@@ -1292,7 +1297,7 @@ void* workerThread(void* connectionInfo) {
                                 // Deallocate KVS memory to simulate shutdown.
                                 kvsCleanup();
 
-                                std::cerr << "STDN received" << std::endl; 
+                                std::cerr << "STDN command received. Pseudo shutdown enabled." << std::endl; 
 
                                 if (write(comm_FD, stdnResponse.c_str(), stdnResponse.length()) < 0) {
                                     fprintf(stderr, "STDN failed to write: %s\n", strerror(errno));
@@ -1405,7 +1410,6 @@ void* workerThread(void* connectionInfo) {
                                 pthread_mutex_unlock(&activeTabletLock);
 
                                 // Reset any state values.
-                                std::cout << "Primary's recovery complete.\n";
                             } else if ((buf[0] == 'f' || buf[0] == 'F') && 
                                     (buf[1] == 'i' || buf[1] == 'I') && 
                                     (buf[2] == 'l' || buf[2] == 'L') &&
@@ -1956,6 +1960,9 @@ std::string requestPrimary() {
     // Get primary response from server.
     while (true) {
         numRead = read(openFD, tempBuf.data(), 2000);
+        for (int i = 0; i < tempBuf.size(); i++) {
+            std::cout << tempBuf[i];
+        }
 
         if (numRead <= 0) {
             fprintf(stderr, "Server disconnected or error occurred in request primary\n");
@@ -3246,11 +3253,9 @@ void recoveryComplete() {
 
     // Send command to server.
     write(openFD, &command[0], command.length());
-std::cout << "After sending notification to master\n";
     // Get response from server.
     while (true) {
         numRead = read(openFD, tempBuf.data(), 2000);
-// std::cout << "After read call\n";
 
         if (numRead <= 0) {
             fprintf(stderr, "Server disconnected or error occurred in request primary\n");
@@ -3263,6 +3268,34 @@ std::cout << "After sending notification to master\n";
 
         // Check if full message was acquired.
         if (buf.size() == 26 && buf[buf.size() - 1] == '\n' && buf[0] == '+') {
+            buf.clear();
+            tempBuf.clear();
+            break;
+        } else {
+            // Clear tempBuf and try again.
+            tempBuf.clear();
+        }
+    }
+
+    // Send quit to server.
+    command = "QUIT\r\n";
+    write(openFD, &command[0], command.length());
+
+    // Get response from server.
+    while (true) {
+        numRead = read(openFD, tempBuf.data(), 2000);
+
+        if (numRead <= 0) {
+            fprintf(stderr, "Server disconnected or error occurred in request primary\n");
+        }
+
+        // Transfer read data to buf.
+        for (int i = 0; i < numRead; i++) {
+            buf.push_back(tempBuf[i]);
+        }
+
+        // Check if full message was acquired.
+        if (buf.size() == 14 && buf[buf.size() - 1] == '\n' && buf[0] == '+') {
             buf.clear();
             tempBuf.clear();
             break;
