@@ -9,7 +9,6 @@ struct ReqInitLine
   std::string method;
   std::string path;
   std::string version;
-  ReqInitLine(std::string method, std::string uri, std::string version) : method(method), path(path), version(version) {}
 };
 
 void computeDigest(char *data, int dataLengthBytes, unsigned char *digestBuffer);
