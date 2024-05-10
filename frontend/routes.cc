@@ -348,7 +348,94 @@ std::vector<std::tuple<std::string, std::string, std::string>> get_frontend_serv
   // Return vector of tuples {server_address, status, num_clients}
   return servers;
 }
+std::vector<std::tuple<std::string, std::string>> get_kvs_pairs()
+{
+  std::vector<std::tuple<std::string, std::string>> pairs;
 
+  // Create socket connection with master server
+  int sock = socket(PF_INET, SOCK_STREAM, 0);
+  struct sockaddr_in serveraddr;
+  bzero(&serveraddr, sizeof(serveraddr));
+  serveraddr.sin_family = AF_INET;
+  inet_pton(AF_INET, MASTER_SERVER_ADDR.c_str(), &serveraddr.sin_addr);
+  serveraddr.sin_port = htons(MASTER_SERVER_PORT);
+
+  // Connect to master backend
+  if (connect(sock, (struct sockaddr *)&serveraddr, sizeof(serveraddr)) < 0)
+  {
+    return {};
+  }
+
+  // Ping master server for backend server address for each replica group
+  std::string replica1_addr = get_backend_address("a");
+  std::string replica2_addr = get_backend_address("j");
+  std::string replica3_addr = get_backend_address("s");
+
+  int replica1_port = std::stoi(replica1_addr.substr(replica1_addr.find(":") + 1));
+  int replica2_port = std::stoi(replica2_addr.substr(replica2_addr.find(":") + 1));
+  int replica3_port = std::stoi(replica3_addr.substr(replica3_addr.find(":") + 1));
+
+  std::vector<int> replica_ports = {replica1_port, replica2_port, replica3_port};
+
+  // Make a PAIR request to each backend server
+  std::string request = "PAIR\r\n";
+
+  for (int port : replica_ports)
+  {
+
+    int s = socket(PF_INET, SOCK_STREAM, 0);
+    struct sockaddr_in serveraddr;
+    bzero(&serveraddr, sizeof(serveraddr));
+    serveraddr.sin_family = AF_INET;
+    inet_pton(AF_INET, MASTER_SERVER_ADDR.c_str(), &serveraddr.sin_addr);
+    serveraddr.sin_port = htons(port);
+
+    write(s, request.c_str(), request.length());
+
+    // Read response from server
+    char buffer[MAX_BUFF_SIZE];
+    int end_index = 0;
+    bool has_full_command = false;
+    std::string command;
+
+    // Read from server for line that ends in <CRLF>
+    while (!has_full_command)
+    {
+      char c;
+      if (read(s, &c, 1) > 0)
+      {
+        buffer[end_index] = c;
+
+        if (end_index >= 1 && c == '\n' && buffer[end_index - 1] == '\r')
+        {
+          has_full_command = true;
+          buffer[end_index - 1] = '\0'; // Replace \r\n with \0
+          command = buffer;
+        }
+
+        end_index++;
+      }
+    }
+
+    // Parse response
+    // Split response by :
+    std::string delimiter = ":";
+    size_t pos = 0;
+    std::string token;
+    while ((pos = command.find(delimiter)) != std::string::npos)
+    {
+      token = command.substr(0, pos);
+      // Split token by ,
+      std::string row = token.substr(0, token.find(","));
+      std::string col = token.substr(token.find(",") + 1);
+      pairs.push_back(std::make_tuple(row, col));
+      command.erase(0, pos + delimiter.length());
+    }
+  }
+
+  // Return vector of tuples {row, col, value}
+  return pairs;
+}
 // Make a get request to the backend server for value of key
 // Returns error message if request fails
 std::string get_kvs(std::string ip, int port, std::string row, std::string col)
@@ -940,10 +1027,11 @@ std::tuple<std::string, std::string, std::string> get_inbox(ReqInitLine *req_ini
 
   // Ping backend master for backend server address
   std::string backend_address_port = get_backend_address("email_" + username);
-  if (backend_address_port.substr(0, 5) == "--ERR") {
-    // server group is down! return 503 error 
+  if (backend_address_port.substr(0, 5) == "--ERR")
+  {
+    // server group is down! return 503 error
     std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-    std::string message_body = "Servers are down. Please try again later."; 
+    std::string message_body = "Servers are down. Please try again later.";
     std::string headers = "";
     headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
     return std::make_tuple(init_response, headers, message_body);
@@ -953,10 +1041,11 @@ std::tuple<std::string, std::string, std::string> get_inbox(ReqInitLine *req_ini
 
   // Get email metadata
   std::string email_metadata = get_kvs(backend_address, backend_port, "email_" + username, "metadata.txt");
-  if (email_metadata.substr(0, 5) == "--ERR") {
+  if (email_metadata.substr(0, 5) == "--ERR")
+  {
     // failed to connect to backend! return an error
     std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-    std::string message_body = "An error occurred. Please try again later."; 
+    std::string message_body = "An error occurred. Please try again later.";
     std::string headers = "";
     headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
     return std::make_tuple(init_response, headers, message_body);
@@ -973,10 +1062,11 @@ std::tuple<std::string, std::string, std::string> get_inbox(ReqInitLine *req_ini
     {
       // Ping backend master for backend server address
       std::string backend_address_port = get_backend_address("email_" + username);
-      if (backend_address_port.substr(0, 5) == "--ERR") {
-        // server group is down! return 503 error 
+      if (backend_address_port.substr(0, 5) == "--ERR")
+      {
+        // server group is down! return 503 error
         std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-        std::string message_body = "Servers are down. Please try again later."; 
+        std::string message_body = "Servers are down. Please try again later.";
         std::string headers = "";
         headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
         return std::make_tuple(init_response, headers, message_body);
@@ -985,10 +1075,11 @@ std::tuple<std::string, std::string, std::string> get_inbox(ReqInitLine *req_ini
       int backend_port = std::stoi(backend_address_port.substr(backend_address_port.find(":") + 1));
       std::cerr << "Message ID: " << message_id << std::endl;
       std::string email_data = get_kvs(backend_address, backend_port, "email_" + username, message_id + ".txt");
-      if (email_data.substr(0, 5) == "--ERR") {
+      if (email_data.substr(0, 5) == "--ERR")
+      {
         // failed to connect to backend! return an error
         std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-        std::string message_body = "An error occurred. Please try again later."; 
+        std::string message_body = "An error occurred. Please try again later.";
         std::string headers = "";
         headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
         return std::make_tuple(init_response, headers, message_body);
@@ -1115,10 +1206,11 @@ std::tuple<std::string, std::string, std::string> get_inbox_message(ReqInitLine 
   std::cerr << "Username: " << username << std::endl;
   // Ping backend master for backend server address
   std::string backend_address_port = get_backend_address("email_" + username);
-  if (backend_address_port.substr(0, 5) == "--ERR") {
-    // server group is down! return 503 error 
+  if (backend_address_port.substr(0, 5) == "--ERR")
+  {
+    // server group is down! return 503 error
     std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-    std::string message_body = "Servers are down. Please try again later."; 
+    std::string message_body = "Servers are down. Please try again later.";
     std::string headers = "";
     headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
     return std::make_tuple(init_response, headers, message_body);
@@ -1276,6 +1368,18 @@ std::tuple<std::string, std::string, std::string> get_admin(ReqInitLine *req_ini
   frontend_server_script += "];\n";
   message_body.insert(insert_index + insert_tag.length(), frontend_server_script);
 
+  // Get key value pairs
+  std::vector<std::tuple<std::string, std::string>> kv_pairs = get_kvs_pairs();
+  std::string kv_script = "\nconst kv_pairs = [\n";
+  for (auto const &kv : kv_pairs)
+  {
+    kv_script += "{";
+    kv_script += "rowkey: \"" + std::get<0>(kv) + "\",";
+    kv_script += "columnkey: \"" + std::get<1>(kv) + "\",";
+    kv_script += "},\n";
+  }
+  kv_script += "];\n";
+
   // Create inital response line
   std::string init_response = req_init_line->version + " 200 OK\r\n";
 
@@ -1342,10 +1446,11 @@ std::tuple<std::string, std::string, std::string> post_login(ReqInitLine *req_in
 
   // Ping backend master for backend server address
   std::string backend_address_port = get_backend_address("user_" + username);
-  if (backend_address_port.substr(0, 5) == "--ERR") {
-    // server group is down! return 503 error 
+  if (backend_address_port.substr(0, 5) == "--ERR")
+  {
+    // server group is down! return 503 error
     std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-    std::string message_body = "Servers are down. Please try again later."; 
+    std::string message_body = "Servers are down. Please try again later.";
     std::string headers = "";
     headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
     return std::make_tuple(init_response, headers, message_body);
@@ -1391,10 +1496,11 @@ std::tuple<std::string, std::string, std::string> post_signup(ReqInitLine *req_i
 
   // Ping backend master for backend server address
   std::string backend_address_port = get_backend_address("user_" + username);
-  if (backend_address_port.substr(0, 5) == "--ERR") {
-    // server group is down! return 503 error 
+  if (backend_address_port.substr(0, 5) == "--ERR")
+  {
+    // server group is down! return 503 error
     std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-    std::string message_body = "Servers are down. Please try again later."; 
+    std::string message_body = "Servers are down. Please try again later.";
     std::string headers = "";
     headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
     return std::make_tuple(init_response, headers, message_body);
@@ -1407,10 +1513,11 @@ std::tuple<std::string, std::string, std::string> post_signup(ReqInitLine *req_i
   // create user file
   std::string command = put_kvs(backend_address, backend_port, "user_" + username, "password.txt", password, false, "");
 
-  if (command.substr(0, 5) == "--ERR") {
+  if (command.substr(0, 5) == "--ERR")
+  {
     // error occurred when putting-- return ERR
     std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-    std::string message_body = "Servers are down. Please try again later."; 
+    std::string message_body = "Servers are down. Please try again later.";
     std::string headers = "";
     headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
     return std::make_tuple(init_response, headers, message_body);
@@ -1419,10 +1526,11 @@ std::tuple<std::string, std::string, std::string> post_signup(ReqInitLine *req_i
   // TODO: handle error
 
   backend_address_port = get_backend_address("email_" + username);
-  if (backend_address_port.substr(0, 5) == "--ERR") {
-    // server group is down! return 503 error 
+  if (backend_address_port.substr(0, 5) == "--ERR")
+  {
+    // server group is down! return 503 error
     std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-    std::string message_body = "Servers are down. Please try again later."; 
+    std::string message_body = "Servers are down. Please try again later.";
     std::string headers = "";
     headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
     return std::make_tuple(init_response, headers, message_body);
@@ -1434,20 +1542,22 @@ std::tuple<std::string, std::string, std::string> post_signup(ReqInitLine *req_i
   // create email metadata file
   command = put_kvs(backend_address, backend_port, "email_" + username, "metadata.txt", "Metadata\n", false, ""); // Need to send non empty value
 
-  if (command.substr(0, 5) == "--ERR") {
+  if (command.substr(0, 5) == "--ERR")
+  {
     // error occurred when putting-- return ERR
     std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-    std::string message_body = "Servers are down. Please try again later."; 
+    std::string message_body = "Servers are down. Please try again later.";
     std::string headers = "";
     headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
     return std::make_tuple(init_response, headers, message_body);
   }
-  
+
   backend_address_port = get_backend_address("file_" + username);
-  if (backend_address_port.substr(0, 5) == "--ERR") {
-    // server group is down! return 503 error 
+  if (backend_address_port.substr(0, 5) == "--ERR")
+  {
+    // server group is down! return 503 error
     std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-    std::string message_body = "Servers are down. Please try again later."; 
+    std::string message_body = "Servers are down. Please try again later.";
     std::string headers = "";
     headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
     return std::make_tuple(init_response, headers, message_body);
@@ -1458,10 +1568,11 @@ std::tuple<std::string, std::string, std::string> post_signup(ReqInitLine *req_i
   command = put_kvs(backend_address, backend_port, "file_" + username, "metadata.txt", "/:1\n", false, "");
 
   // TODO: atomicity? these can get out of sync
-  if (command.substr(0, 5) == "--ERR") {
+  if (command.substr(0, 5) == "--ERR")
+  {
     // error occurred when putting-- return ERR
     std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-    std::string message_body = "Servers are down. Please try again later."; 
+    std::string message_body = "Servers are down. Please try again later.";
     std::string headers = "";
     headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
     return std::make_tuple(init_response, headers, message_body);
@@ -1470,10 +1581,11 @@ std::tuple<std::string, std::string, std::string> post_signup(ReqInitLine *req_i
   // create next id column
   command = put_kvs(backend_address, backend_port, "file_" + username, "nextid.txt", "2", false, "");
 
-  if (command.substr(0, 5) == "--ERR") {
+  if (command.substr(0, 5) == "--ERR")
+  {
     // error occurred when putting-- return ERR
     std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-    std::string message_body = "Servers are down. Please try again later."; 
+    std::string message_body = "Servers are down. Please try again later.";
     std::string headers = "";
     headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
     return std::make_tuple(init_response, headers, message_body);
@@ -1482,10 +1594,11 @@ std::tuple<std::string, std::string, std::string> post_signup(ReqInitLine *req_i
   // create home directory
   command = put_kvs(backend_address, backend_port, "file_" + username, "1.txt", "is_directory:true\nparent:0\nchildren_files:\nchildren_folders:\n", false, "");
 
-  if (command.substr(0, 5) == "--ERR") {
+  if (command.substr(0, 5) == "--ERR")
+  {
     // error occurred when putting-- return ERR
     std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-    std::string message_body = "Servers are down. Please try again later."; 
+    std::string message_body = "Servers are down. Please try again later.";
     std::string headers = "";
     headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
     return std::make_tuple(init_response, headers, message_body);
@@ -1558,10 +1671,11 @@ std::tuple<std::string, std::string, std::string> post_send_message(ReqInitLine 
       // Ping backend master for backend server address
       std::string recipient_remove_domain = recipient.substr(0, recipient.find("@"));
       std::string backend_address_port = get_backend_address("email_" + recipient_remove_domain);
-      if (backend_address_port.substr(0, 5) == "--ERR") {
-        // server group is down! return 503 error 
+      if (backend_address_port.substr(0, 5) == "--ERR")
+      {
+        // server group is down! return 503 error
         std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-        std::string message_body = "Servers are down. Please try again later."; 
+        std::string message_body = "Servers are down. Please try again later.";
         std::string headers = "";
         headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
         return std::make_tuple(init_response, headers, message_body);
@@ -1573,10 +1687,11 @@ std::tuple<std::string, std::string, std::string> post_send_message(ReqInitLine 
       if (user_exists.length() <= 5 || user_exists.length() > 5 && user_exists.substr(0, 5) != "--ERR")
       {
         std::string put_email_response = put_kvs(backend_address, backend_port, "email_" + recipient_remove_domain, uidl + ".txt", email_str, false, "");
-        if (put_email_response.substr(0, 5) == "--ERR") {
+        if (put_email_response.substr(0, 5) == "--ERR")
+        {
           // error occurred when putting-- return ERR
           std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-          std::string message_body = "Servers are down. Please try again later."; 
+          std::string message_body = "Servers are down. Please try again later.";
           std::string headers = "";
           headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
           return std::make_tuple(init_response, headers, message_body);
@@ -1587,10 +1702,11 @@ std::tuple<std::string, std::string, std::string> post_send_message(ReqInitLine 
         while (put_metadata_response != "+OK Value added")
         {
           backend_address_port = get_backend_address("email_" + recipient_remove_domain);
-          if (backend_address_port.substr(0, 5) == "--ERR") {
-            // server group is down! return 503 error 
+          if (backend_address_port.substr(0, 5) == "--ERR")
+          {
+            // server group is down! return 503 error
             std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-            std::string message_body = "Servers are down. Please try again later."; 
+            std::string message_body = "Servers are down. Please try again later.";
             std::string headers = "";
             headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
             return std::make_tuple(init_response, headers, message_body);
@@ -1736,10 +1852,11 @@ std::tuple<std::string, std::string, std::string> post_delete_message(ReqInitLin
   {
     // Ping backend master for backend server address
     std::string backend_address_port = get_backend_address("email_" + username);
-    if (backend_address_port.substr(0, 5) == "--ERR") {
-      // server group is down! return 503 error 
+    if (backend_address_port.substr(0, 5) == "--ERR")
+    {
+      // server group is down! return 503 error
       std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-      std::string message_body = "Servers are down. Please try again later."; 
+      std::string message_body = "Servers are down. Please try again later.";
       std::string headers = "";
       headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
       return std::make_tuple(init_response, headers, message_body);
@@ -1752,7 +1869,6 @@ std::tuple<std::string, std::string, std::string> post_delete_message(ReqInitLin
     if (metadata.length() <= 5 || metadata.length() > 5 && metadata.substr(0, 5) != "--ERR")
     {
       std::string new_metadata = metadata.substr(0, metadata.find(message_id) - 1) + metadata.substr(metadata.find(message_id) + message_id.length());
-      // TODO: make this a while loop
       put_metadata_response = put_kvs(backend_address, backend_port, "email_" + username, "metadata.txt", new_metadata, true, metadata);
       std::cerr << "Put metadata response: " << put_metadata_response << std::endl;
     }
@@ -1760,10 +1876,11 @@ std::tuple<std::string, std::string, std::string> post_delete_message(ReqInitLin
 
   // Ping backend master for backend server address
   std::string backend_address_port = get_backend_address("email_" + username);
-  if (backend_address_port.substr(0, 5) == "--ERR") {
-    // server group is down! return 503 error 
+  if (backend_address_port.substr(0, 5) == "--ERR")
+  {
+    // server group is down! return 503 error
     std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-    std::string message_body = "Servers are down. Please try again later."; 
+    std::string message_body = "Servers are down. Please try again later.";
     std::string headers = "";
     headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
     return std::make_tuple(init_response, headers, message_body);
@@ -1819,10 +1936,11 @@ std::tuple<std::string, std::string, std::string> post_change_password(ReqInitLi
   {
     // Ping backend master for backend server address
     std::string backend_address_port = get_backend_address("user_" + username);
-    if (backend_address_port.substr(0, 5) == "--ERR") {
-      // server group is down! return 503 error 
+    if (backend_address_port.substr(0, 5) == "--ERR")
+    {
+      // server group is down! return 503 error
       std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-      std::string message_body = "Servers are down. Please try again later."; 
+      std::string message_body = "Servers are down. Please try again later.";
       std::string headers = "";
       headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
       return std::make_tuple(init_response, headers, message_body);
@@ -1833,7 +1951,6 @@ std::tuple<std::string, std::string, std::string> post_change_password(ReqInitLi
     std::string old_password = get_kvs(backend_address, backend_port, "user_" + username, "password.txt");
     if (old_password.length() <= 5 || old_password.length() > 5 && old_password.substr(0, 5) != "--ERR")
     {
-      // TODO: make this a while loop/add error handling here
       put_metadata_response = put_kvs(backend_address, backend_port, "user_" + username, "password.txt", password, true, old_password);
     }
   }
@@ -2043,10 +2160,11 @@ std::tuple<std::string, std::string, std::string> get_storage(ReqInitLine *req_i
 
   // Ping backend master for backend server address
   std::string backend_address_port = get_backend_address("file_" + username);
-  if (backend_address_port.substr(0, 5) == "--ERR") {
-    // server group is down! return 503 error 
+  if (backend_address_port.substr(0, 5) == "--ERR")
+  {
+    // server group is down! return 503 error
     std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-    std::string message_body = "Servers are down. Please try again later."; 
+    std::string message_body = "Servers are down. Please try again later.";
     std::string headers = "";
     headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
     return std::make_tuple(init_response, headers, message_body);
@@ -2056,15 +2174,15 @@ std::tuple<std::string, std::string, std::string> get_storage(ReqInitLine *req_i
 
   // query backend for the uuid of this folder
   std::string metadata = get_kvs(backend_address, backend_port, "file_" + username, "metadata.txt");
-  if (metadata.substr(0, 5) == "--ERR") {
+  if (metadata.substr(0, 5) == "--ERR")
+  {
     // failed to connect to backend! return an error
     std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-    std::string message_body = "An error occurred. Please try again later."; 
+    std::string message_body = "An error occurred. Please try again later.";
     std::string headers = "";
     headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
     return std::make_tuple(init_response, headers, message_body);
   }
-
 
   // parse metadata file for the uuid of the folder
   std::string searchable = folder_path + ":";
@@ -2076,10 +2194,11 @@ std::tuple<std::string, std::string, std::string> get_storage(ReqInitLine *req_i
 
   // use uuid to get folder data
   std::string folder_data = get_kvs(backend_address, backend_port, "file_" + username, uuid);
-  if (folder_data.substr(0, 5) == "--ERR") {
+  if (folder_data.substr(0, 5) == "--ERR")
+  {
     // failed to connect to backend! return an error
     std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-    std::string message_body = "An error occurred. Please try again later."; 
+    std::string message_body = "An error occurred. Please try again later.";
     std::string headers = "";
     headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
     return std::make_tuple(init_response, headers, message_body);
@@ -2242,7 +2361,6 @@ std::tuple<std::string, std::string, std::string> get_file(ReqInitLine *req_init
     slash_ind = file_name.find("/");
   }
 
-
   // Create response and send HTML
   std::ifstream file(STATICS_LOC + "file.html");
   std::string message_body;
@@ -2336,10 +2454,11 @@ std::tuple<std::string, std::string, std::string> post_file(ReqInitLine *req_ini
 
   // Ping backend master for backend server address
   std::string backend_address_port = get_backend_address("file_" + username);
-  if (backend_address_port.substr(0, 5) == "--ERR") {
-    // server group is down! return 503 error 
+  if (backend_address_port.substr(0, 5) == "--ERR")
+  {
+    // server group is down! return 503 error
     std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-    std::string message_body = "Servers are down. Please try again later."; 
+    std::string message_body = "Servers are down. Please try again later.";
     std::string headers = "";
     headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
     return std::make_tuple(init_response, headers, message_body);
@@ -2349,10 +2468,11 @@ std::tuple<std::string, std::string, std::string> post_file(ReqInitLine *req_ini
 
   // open metadata file
   std::string metadata = get_kvs(backend_address, backend_port, "file_" + username, "metadata.txt");
-  if (metadata.substr(0, 5) == "--ERR") {
+  if (metadata.substr(0, 5) == "--ERR")
+  {
     // failed to connect to backend! return an error
     std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-    std::string message_body = "An error occurred. Please try again later."; 
+    std::string message_body = "An error occurred. Please try again later.";
     std::string headers = "";
     headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
     return std::make_tuple(init_response, headers, message_body);
@@ -2368,10 +2488,11 @@ std::tuple<std::string, std::string, std::string> post_file(ReqInitLine *req_ini
 
   // use uuid to get folder data
   std::string folder_data = get_kvs(backend_address, backend_port, "file_" + username, uuid);
-  if (folder_data.substr(0, 5) == "--ERR") {
+  if (folder_data.substr(0, 5) == "--ERR")
+  {
     // failed to connect to backend! return an error
     std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-    std::string message_body = "An error occurred. Please try again later."; 
+    std::string message_body = "An error occurred. Please try again later.";
     std::string headers = "";
     headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
     return std::make_tuple(init_response, headers, message_body);
@@ -2382,15 +2503,16 @@ std::tuple<std::string, std::string, std::string> post_file(ReqInitLine *req_ini
   std::string prefolder = folder_data.substr(0, curr_ind);
   std::string postfolder = folder_data.substr(curr_ind);
   std::string new_folder_data = prefolder + file_name + "\n" + postfolder;
-  // TODO: make this a while loop 
+  // TODO: make this a while loop
   std::string command = put_kvs(backend_address, backend_port, "file_" + username, uuid, new_folder_data, true, folder_data);
 
   // now, access next_uuid to get a uuid for this new file
   std::string next_uuid = get_kvs(backend_address, backend_port, "file_" + username, "nextid.txt");
-  if (next_uuid.substr(0, 5) == "--ERR") {
+  if (next_uuid.substr(0, 5) == "--ERR")
+  {
     // failed to connect to backend! return an error
     std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-    std::string message_body = "An error occurred. Please try again later."; 
+    std::string message_body = "An error occurred. Please try again later.";
     std::string headers = "";
     headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
     return std::make_tuple(init_response, headers, message_body);
@@ -2400,10 +2522,11 @@ std::tuple<std::string, std::string, std::string> post_file(ReqInitLine *req_ini
 
   command = put_kvs(backend_address, backend_port, "file_" + username, "nextid.txt", next_uuid, false, "");
 
-  if (command.substr(0, 5) == "--ERR") {
+  if (command.substr(0, 5) == "--ERR")
+  {
     // error occurred when putting-- return ERR
     std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-    std::string message_body = "Servers are down. Please try again later."; 
+    std::string message_body = "Servers are down. Please try again later.";
     std::string headers = "";
     headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
     return std::make_tuple(init_response, headers, message_body);
@@ -2416,10 +2539,11 @@ std::tuple<std::string, std::string, std::string> post_file(ReqInitLine *req_ini
 
   // create the new file
   command = put_kvs(backend_address, backend_port, "file_" + username, std::to_string(new_uuid) + ".txt", "is_directory:false\nparent:" + uuid + "\n", false, "");
-  if (command.substr(0, 5) == "--ERR") {
+  if (command.substr(0, 5) == "--ERR")
+  {
     // error occurred when putting-- return ERR
     std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-    std::string message_body = "Servers are down. Please try again later."; 
+    std::string message_body = "Servers are down. Please try again later.";
     std::string headers = "";
     headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
     return std::make_tuple(init_response, headers, message_body);
@@ -2427,10 +2551,11 @@ std::tuple<std::string, std::string, std::string> post_file(ReqInitLine *req_ini
 
   // write to new row data of the file
   backend_address_port = get_backend_address(username + std::to_string(new_uuid) + ".txt");
-  if (backend_address_port.substr(0, 5) == "--ERR") {
-    // server group is down! return 503 error 
+  if (backend_address_port.substr(0, 5) == "--ERR")
+  {
+    // server group is down! return 503 error
     std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-    std::string message_body = "Servers are down. Please try again later."; 
+    std::string message_body = "Servers are down. Please try again later.";
     std::string headers = "";
     headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
     return std::make_tuple(init_response, headers, message_body);
@@ -2440,10 +2565,11 @@ std::tuple<std::string, std::string, std::string> post_file(ReqInitLine *req_ini
 
   // write data in new row
   command = put_kvs(backend_address, backend_port, username + std::to_string(new_uuid) + ".txt", "data.txt", file_info, false, "");
-  if (command.substr(0, 5) == "--ERR") {
+  if (command.substr(0, 5) == "--ERR")
+  {
     // error occurred when putting-- return ERR
     std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-    std::string message_body = "Servers are down. Please try again later."; 
+    std::string message_body = "Servers are down. Please try again later.";
     std::string headers = "";
     headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
     return std::make_tuple(init_response, headers, message_body);
@@ -2488,10 +2614,11 @@ std::tuple<std::string, std::string, std::string> download_file(ReqInitLine *req
 
   // Ping backend master for backend server address
   std::string backend_address_port = get_backend_address("file_" + username);
-  if (backend_address_port.substr(0, 5) == "--ERR") {
-    // server group is down! return 503 error 
+  if (backend_address_port.substr(0, 5) == "--ERR")
+  {
+    // server group is down! return 503 error
     std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-    std::string message_body = "Servers are down. Please try again later."; 
+    std::string message_body = "Servers are down. Please try again later.";
     std::string headers = "";
     headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
     return std::make_tuple(init_response, headers, message_body);
@@ -2501,10 +2628,11 @@ std::tuple<std::string, std::string, std::string> download_file(ReqInitLine *req
 
   // open metadata file
   std::string metadata = get_kvs(backend_address, backend_port, "file_" + username, "metadata.txt");
-  if (metadata.substr(0, 5) == "--ERR") {
+  if (metadata.substr(0, 5) == "--ERR")
+  {
     // failed to connect to backend! return an error
     std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-    std::string message_body = "An error occurred. Please try again later."; 
+    std::string message_body = "An error occurred. Please try again later.";
     std::string headers = "";
     headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
     return std::make_tuple(init_response, headers, message_body);
@@ -2520,10 +2648,11 @@ std::tuple<std::string, std::string, std::string> download_file(ReqInitLine *req
 
   // open file data
   backend_address_port = get_backend_address(username + uuid);
-  if (backend_address_port.substr(0, 5) == "--ERR") {
-    // server group is down! return 503 error 
+  if (backend_address_port.substr(0, 5) == "--ERR")
+  {
+    // server group is down! return 503 error
     std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-    std::string message_body = "Servers are down. Please try again later."; 
+    std::string message_body = "Servers are down. Please try again later.";
     std::string headers = "";
     headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
     return std::make_tuple(init_response, headers, message_body);
@@ -2532,10 +2661,11 @@ std::tuple<std::string, std::string, std::string> download_file(ReqInitLine *req
   backend_port = std::stoi(backend_address_port.substr(backend_address_port.find(":") + 1));
 
   std::string file_data = get_kvs(backend_address, backend_port, username + uuid, "data.txt");
-  if (file_data.substr(0, 5) == "--ERR") {
+  if (file_data.substr(0, 5) == "--ERR")
+  {
     // failed to connect to backend! return an error
     std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-    std::string message_body = "An error occurred. Please try again later."; 
+    std::string message_body = "An error occurred. Please try again later.";
     std::string headers = "";
     headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
     return std::make_tuple(init_response, headers, message_body);
@@ -2611,10 +2741,11 @@ std::tuple<std::string, std::string, std::string> post_folder(ReqInitLine *req_i
 
   // Ping backend master for backend server address
   std::string backend_address_port = get_backend_address("file_" + username);
-  if (backend_address_port.substr(0, 5) == "--ERR") {
-    // server group is down! return 503 error 
+  if (backend_address_port.substr(0, 5) == "--ERR")
+  {
+    // server group is down! return 503 error
     std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-    std::string message_body = "Servers are down. Please try again later."; 
+    std::string message_body = "Servers are down. Please try again later.";
     std::string headers = "";
     headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
     return std::make_tuple(init_response, headers, message_body);
@@ -2624,10 +2755,11 @@ std::tuple<std::string, std::string, std::string> post_folder(ReqInitLine *req_i
 
   // open metadata file
   std::string metadata = get_kvs(backend_address, backend_port, "file_" + username, "metadata.txt");
-  if (metadata.substr(0, 5) == "--ERR") {
+  if (metadata.substr(0, 5) == "--ERR")
+  {
     // failed to connect to backend! return an error
     std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-    std::string message_body = "An error occurred. Please try again later."; 
+    std::string message_body = "An error occurred. Please try again later.";
     std::string headers = "";
     headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
     return std::make_tuple(init_response, headers, message_body);
@@ -2643,10 +2775,11 @@ std::tuple<std::string, std::string, std::string> post_folder(ReqInitLine *req_i
 
   // use uuid to get folder data
   std::string folder_data = get_kvs(backend_address, backend_port, "file_" + username, uuid);
-  if (folder_data.substr(0, 5) == "--ERR") {
+  if (folder_data.substr(0, 5) == "--ERR")
+  {
     // failed to connect to backend! return an error
     std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-    std::string message_body = "An error occurred. Please try again later."; 
+    std::string message_body = "An error occurred. Please try again later.";
     std::string headers = "";
     headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
     return std::make_tuple(init_response, headers, message_body);
@@ -2659,10 +2792,11 @@ std::tuple<std::string, std::string, std::string> post_folder(ReqInitLine *req_i
 
   // now, access next_uuid to get a uuid for this new folder
   std::string next_uuid = get_kvs(backend_address, backend_port, "file_" + username, "nextid.txt");
-  if (next_uuid.substr(0, 5) == "--ERR") {
+  if (next_uuid.substr(0, 5) == "--ERR")
+  {
     // failed to connect to backend! return an error
     std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-    std::string message_body = "An error occurred. Please try again later."; 
+    std::string message_body = "An error occurred. Please try again later.";
     std::string headers = "";
     headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
     return std::make_tuple(init_response, headers, message_body);
@@ -2672,10 +2806,11 @@ std::tuple<std::string, std::string, std::string> post_folder(ReqInitLine *req_i
 
   command = put_kvs(backend_address, backend_port, "file_" + username, "nextid.txt", next_uuid, false, "");
 
-  if (command.substr(0, 5) == "--ERR") {
+  if (command.substr(0, 5) == "--ERR")
+  {
     // error occurred when putting-- return ERR
     std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-    std::string message_body = "Servers are down. Please try again later."; 
+    std::string message_body = "Servers are down. Please try again later.";
     std::string headers = "";
     headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
     return std::make_tuple(init_response, headers, message_body);
@@ -2731,10 +2866,11 @@ std::tuple<std::string, std::string, std::string> delete_file(ReqInitLine *req_i
 
   // Ping backend master for backend server address
   std::string backend_address_port = get_backend_address("file_" + username);
-  if (backend_address_port.substr(0, 5) == "--ERR") {
-    // server group is down! return 503 error 
+  if (backend_address_port.substr(0, 5) == "--ERR")
+  {
+    // server group is down! return 503 error
     std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-    std::string message_body = "Servers are down. Please try again later."; 
+    std::string message_body = "Servers are down. Please try again later.";
     std::string headers = "";
     headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
     return std::make_tuple(init_response, headers, message_body);
@@ -2744,10 +2880,11 @@ std::tuple<std::string, std::string, std::string> delete_file(ReqInitLine *req_i
 
   // open metadata file
   std::string metadata = get_kvs(backend_address, backend_port, "file_" + username, "metadata.txt");
-  if (metadata.substr(0, 5) == "--ERR") {
+  if (metadata.substr(0, 5) == "--ERR")
+  {
     // failed to connect to backend! return an error
     std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-    std::string message_body = "An error occurred. Please try again later."; 
+    std::string message_body = "An error occurred. Please try again later.";
     std::string headers = "";
     headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
     return std::make_tuple(init_response, headers, message_body);
@@ -2774,10 +2911,11 @@ std::tuple<std::string, std::string, std::string> delete_file(ReqInitLine *req_i
 
   // open the data for this file
   std::string file_data = get_kvs(backend_address, backend_port, "file_" + username, uuid + ".txt");
-  if (file_data.substr(0, 5) == "--ERR") {
+  if (file_data.substr(0, 5) == "--ERR")
+  {
     // failed to connect to backend! return an error
     std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-    std::string message_body = "An error occurred. Please try again later."; 
+    std::string message_body = "An error occurred. Please try again later.";
     std::string headers = "";
     headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
     return std::make_tuple(init_response, headers, message_body);
@@ -2791,10 +2929,11 @@ std::tuple<std::string, std::string, std::string> delete_file(ReqInitLine *req_i
 
   // open the data for the parent uuid
   std::string parent_data = get_kvs(backend_address, backend_port, "file_" + username, parent_uuid);
-  if (parent_data.substr(0, 5) == "--ERR") {
+  if (parent_data.substr(0, 5) == "--ERR")
+  {
     // failed to connect to backend! return an error
     std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-    std::string message_body = "An error occurred. Please try again later."; 
+    std::string message_body = "An error occurred. Please try again later.";
     std::string headers = "";
     headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
     return std::make_tuple(init_response, headers, message_body);
@@ -2816,10 +2955,11 @@ std::tuple<std::string, std::string, std::string> delete_file(ReqInitLine *req_i
 
   // delete data of file
   std::string data_backend_address_port = get_backend_address(username + uuid + ".txt");
-  if (data_backend_address_port.substr(0, 5) == "--ERR") {
-    // server group is down! return 503 error 
+  if (data_backend_address_port.substr(0, 5) == "--ERR")
+  {
+    // server group is down! return 503 error
     std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-    std::string message_body = "Servers are down. Please try again later."; 
+    std::string message_body = "Servers are down. Please try again later.";
     std::string headers = "";
     headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
     return std::make_tuple(init_response, headers, message_body);
@@ -2854,10 +2994,11 @@ std::tuple<std::string, std::string, std::string> delete_file(ReqInitLine *req_i
     next_ind = metadata.find("\n" + file_path + "/");
 
     data_backend_address_port = get_backend_address(username + uuid + ".txt");
-    if (data_backend_address_port.substr(0, 5) == "--ERR") {
-      // server group is down! return 503 error 
+    if (data_backend_address_port.substr(0, 5) == "--ERR")
+    {
+      // server group is down! return 503 error
       std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-      std::string message_body = "Servers are down. Please try again later."; 
+      std::string message_body = "Servers are down. Please try again later.";
       std::string headers = "";
       headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
       return std::make_tuple(init_response, headers, message_body);
@@ -2925,10 +3066,11 @@ std::tuple<std::string, std::string, std::string> rename_file(ReqInitLine *req_i
 
   // Ping backend master for backend server address
   std::string backend_address_port = get_backend_address("file_" + username);
-  if (backend_address_port.substr(0, 5) == "--ERR") {
-    // server group is down! return 503 error 
+  if (backend_address_port.substr(0, 5) == "--ERR")
+  {
+    // server group is down! return 503 error
     std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-    std::string message_body = "Servers are down. Please try again later."; 
+    std::string message_body = "Servers are down. Please try again later.";
     std::string headers = "";
     headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
     return std::make_tuple(init_response, headers, message_body);
@@ -2938,10 +3080,11 @@ std::tuple<std::string, std::string, std::string> rename_file(ReqInitLine *req_i
 
   // open metadata file
   std::string metadata = get_kvs(backend_address, backend_port, "file_" + username, "metadata.txt");
-  if (metadata.substr(0, 5) == "--ERR") {
+  if (metadata.substr(0, 5) == "--ERR")
+  {
     // failed to connect to backend! return an error
     std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-    std::string message_body = "An error occurred. Please try again later."; 
+    std::string message_body = "An error occurred. Please try again later.";
     std::string headers = "";
     headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
     return std::make_tuple(init_response, headers, message_body);
@@ -2968,10 +3111,11 @@ std::tuple<std::string, std::string, std::string> rename_file(ReqInitLine *req_i
 
   // open the data for this file
   std::string file_data = get_kvs(backend_address, backend_port, "file_" + username, uuid + ".txt");
-  if (file_data.substr(0, 5) == "--ERR") {
+  if (file_data.substr(0, 5) == "--ERR")
+  {
     // failed to connect to backend! return an error
     std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-    std::string message_body = "An error occurred. Please try again later."; 
+    std::string message_body = "An error occurred. Please try again later.";
     std::string headers = "";
     headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
     return std::make_tuple(init_response, headers, message_body);
@@ -2984,10 +3128,11 @@ std::tuple<std::string, std::string, std::string> rename_file(ReqInitLine *req_i
 
   // open the data for the parent uuid
   std::string parent_data = get_kvs(backend_address, backend_port, "file_" + username, parent_uuid);
-  if (parent_data.substr(0, 5) == "--ERR") {
+  if (parent_data.substr(0, 5) == "--ERR")
+  {
     // failed to connect to backend! return an error
     std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-    std::string message_body = "An error occurred. Please try again later."; 
+    std::string message_body = "An error occurred. Please try again later.";
     std::string headers = "";
     headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
     return std::make_tuple(init_response, headers, message_body);
@@ -3088,10 +3233,11 @@ std::tuple<std::string, std::string, std::string> move_file(ReqInitLine *req_ini
 
   // Ping backend master for backend server address
   std::string backend_address_port = get_backend_address("file_" + username);
-  if (backend_address_port.substr(0, 5) == "--ERR") {
-    // server group is down! return 503 error 
+  if (backend_address_port.substr(0, 5) == "--ERR")
+  {
+    // server group is down! return 503 error
     std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-    std::string message_body = "Servers are down. Please try again later."; 
+    std::string message_body = "Servers are down. Please try again later.";
     std::string headers = "";
     headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
     return std::make_tuple(init_response, headers, message_body);
@@ -3101,10 +3247,11 @@ std::tuple<std::string, std::string, std::string> move_file(ReqInitLine *req_ini
 
   // open metadata file
   std::string metadata = get_kvs(backend_address, backend_port, "file_" + username, "metadata.txt");
-  if (metadata.substr(0, 5) == "--ERR") {
+  if (metadata.substr(0, 5) == "--ERR")
+  {
     // failed to connect to backend! return an error
     std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-    std::string message_body = "An error occurred. Please try again later."; 
+    std::string message_body = "An error occurred. Please try again later.";
     std::string headers = "";
     headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
     return std::make_tuple(init_response, headers, message_body);
@@ -3161,10 +3308,11 @@ std::tuple<std::string, std::string, std::string> move_file(ReqInitLine *req_ini
 
     // open the data for this file
     std::string file_data = get_kvs(backend_address, backend_port, "file_" + username, uuid + ".txt");
-    if (file_data.substr(0, 5) == "--ERR") {
+    if (file_data.substr(0, 5) == "--ERR")
+    {
       // failed to connect to backend! return an error
       std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-      std::string message_body = "An error occurred. Please try again later."; 
+      std::string message_body = "An error occurred. Please try again later.";
       std::string headers = "";
       headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
       return std::make_tuple(init_response, headers, message_body);
@@ -3189,10 +3337,11 @@ std::tuple<std::string, std::string, std::string> move_file(ReqInitLine *req_ini
 
     // write new_file_value
     command = put_kvs(backend_address, backend_port, "file_" + username, uuid + ".txt", new_file_value, false, "");
-    if (command.substr(0, 5) == "--ERR") {
+    if (command.substr(0, 5) == "--ERR")
+    {
       // error occurred when putting-- return ERR
       std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-      std::string message_body = "Servers are down. Please try again later."; 
+      std::string message_body = "Servers are down. Please try again later.";
       std::string headers = "";
       headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
       return std::make_tuple(init_response, headers, message_body);
@@ -3200,10 +3349,11 @@ std::tuple<std::string, std::string, std::string> move_file(ReqInitLine *req_ini
 
     // open the data for the old parent uuid
     std::string parent_data = get_kvs(backend_address, backend_port, "file_" + username, parent_uuid);
-    if (parent_data.substr(0, 5) == "--ERR") {
+    if (parent_data.substr(0, 5) == "--ERR")
+    {
       // failed to connect to backend! return an error
       std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-      std::string message_body = "An error occurred. Please try again later."; 
+      std::string message_body = "An error occurred. Please try again later.";
       std::string headers = "";
       headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
       return std::make_tuple(init_response, headers, message_body);
@@ -3219,10 +3369,11 @@ std::tuple<std::string, std::string, std::string> move_file(ReqInitLine *req_ini
 
     // open the data for the new parent uuid
     parent_data = get_kvs(backend_address, backend_port, "file_" + username, new_parent_uuid + ".txt");
-    if (parent_data.substr(0, 5) == "--ERR") {
+    if (parent_data.substr(0, 5) == "--ERR")
+    {
       // failed to connect to backend! return an error
       std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-      std::string message_body = "An error occurred. Please try again later."; 
+      std::string message_body = "An error occurred. Please try again later.";
       std::string headers = "";
       headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
       return std::make_tuple(init_response, headers, message_body);
@@ -3245,10 +3396,11 @@ std::tuple<std::string, std::string, std::string> move_file(ReqInitLine *req_ini
     }
     // write new value to new parent
     command = put_kvs(backend_address, backend_port, "file_" + username, new_parent_uuid + ".txt", new_parent_value, false, "");
-    if (command.substr(0, 5) == "--ERR") {
+    if (command.substr(0, 5) == "--ERR")
+    {
       // error occurred when putting-- return ERR
       std::string init_response = req_init_line->version + " 503 Service Unavailable\r\n";
-      std::string message_body = "Servers are down. Please try again later."; 
+      std::string message_body = "Servers are down. Please try again later.";
       std::string headers = "";
       headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
       return std::make_tuple(init_response, headers, message_body);
