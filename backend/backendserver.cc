@@ -455,7 +455,8 @@ void* workerThread(void* connectionInfo) {
                         }
                     }
                 } else if (pwrtReceived == true) {
-                    logActivity(++sequenceNumber, targetTablet, requestedCommand, requestedRow, requestedColumn, *valueData, std::to_string(valueData->length()));
+                    sequenceNumber++;
+                    logActivity(sequenceNumber, targetTablet, requestedCommand, requestedRow, requestedColumn, *valueData, std::to_string(valueData->length()));
                     keyValueStore[requestedRow][requestedColumn] = valueData;
 
                     // Add nodes to list for parsing.
@@ -1058,7 +1059,8 @@ void* workerThread(void* connectionInfo) {
 
                                 if (keyValueStore[requestedRow][requestedColumn] != nullptr) {
                                     // Deallocate memory and erase from KVS.
-                                    logActivity(++sequenceNumber, targetTablet, "DELE", requestedRow, requestedColumn, "", "");
+                                    sequenceNumber++;
+                                    logActivity(sequenceNumber, targetTablet, "DELE", requestedRow, requestedColumn, "", "");
                                     delete keyValueStore[requestedRow][requestedColumn];
                                     keyValueStore[requestedRow].erase(requestedColumn);
 
@@ -1201,7 +1203,6 @@ void* workerThread(void* connectionInfo) {
                                         newSequenceNumber += remvArgument[i];
                                     }
                                 }
-
                                 targetTablet = std::tolower(requestedRow[0]);
                                 sequenceNumber = std::stoi(newSequenceNumber);
 
@@ -1293,11 +1294,13 @@ void* workerThread(void* connectionInfo) {
                                 }
 
                                 currentPrimary = false;
+                                activeTablet = '0';
 
                                 // Deallocate KVS memory to simulate shutdown.
                                 kvsCleanup();
 
-                                std::cerr << "STDN command received. Pseudo shutdown enabled." << std::endl; 
+                                // std::cerr << "STDN command received. Pseudo shutdown enabled." << std::endl;
+                                fprintf(stderr,"[Storage Server: %s] Has died - waiting for recovery signal from master server", ipPorts[myIndex].c_str());
 
                                 if (write(comm_FD, stdnResponse.c_str(), stdnResponse.length()) < 0) {
                                     fprintf(stderr, "STDN failed to write: %s\n", strerror(errno));
@@ -1960,9 +1963,6 @@ std::string requestPrimary() {
     // Get primary response from server.
     while (true) {
         numRead = read(openFD, tempBuf.data(), 2000);
-        for (int i = 0; i < tempBuf.size(); i++) {
-            std::cout << tempBuf[i];
-        }
 
         if (numRead <= 0) {
             fprintf(stderr, "Server disconnected or error occurred in request primary\n");
@@ -1987,7 +1987,10 @@ std::string requestPrimary() {
             buf.clear();
             tempBuf.clear();
             break;
-        } else if (buf.size() == 29 && buf[0] == '-') {
+        } else if (buf.size() == 41 && buf[0] == '-') {
+            buf.clear();
+            tempBuf.clear();
+            break;
             primary = "";
         } else {
             // Clear tempBuf and try again.
@@ -2528,6 +2531,8 @@ void recovery() {
     std::string activePrimary = requestPrimary();
 
     if (activePrimary.length() > 0) {
+        fprintf(stderr, "[Recovering Node: %s] Recovery initiated - contacting primary\n", ipPorts[myIndex].c_str());
+
         // Get the most recently checkpointed sequence numbers for each tablet.
         std::string argument = ipPorts[myIndex];
 
@@ -2544,9 +2549,9 @@ void recovery() {
         // Send recovery request to primary.
         requestData(activePrimary, argument);
     } else {
-
+        fprintf(stderr, "[Recovering Node: %s] No nodes currently active - independent recovery initiated\n", ipPorts[myIndex].c_str());
     }
-    
+
     // Notify master.
     recoveryComplete();
 
@@ -2557,6 +2562,8 @@ void recovery() {
     pseudoShutDown = false;
     logOrCheckpoint = false;
     recoveringTablet = '0';
+
+    fprintf(stderr, "[Recovering Node: %s] Recovery complete.\n", ipPorts[myIndex].c_str());
 }
 
 void loadRecordCounts() {
@@ -2794,6 +2801,8 @@ void sendLogFileData(std::string node, std::vector<char>& data, char tablet) {
     }
 
     address.sin_family = AF_INET;
+        std::cout << "sendLogFileData stoi\n";
+
     address.sin_port = htons(std::stoi(nodePort));
 
     if (inet_pton(AF_INET, nodeIP.data(), &address.sin_addr) <= 0) {
@@ -3277,35 +3286,33 @@ void recoveryComplete() {
         }
     }
 
-    // Send quit to server.
-    command = "QUIT\r\n";
-    write(openFD, &command[0], command.length());
+    // // Send quit to server.
+    // command = "QUIT\r\n";
+    // write(openFD, &command[0], command.length());
 
-    // Get response from server.
-    while (true) {
-        numRead = read(openFD, tempBuf.data(), 2000);
+    // // Get response from server.
+    // while (true) {
+    //     numRead = read(openFD, tempBuf.data(), 2000);
 
-        if (numRead <= 0) {
-            fprintf(stderr, "Server disconnected or error occurred in request primary\n");
-        }
+    //     if (numRead <= 0) {
+    //         fprintf(stderr, "Server disconnected or error occurred in request primary\n");
+    //     }
 
-        // Transfer read data to buf.
-        for (int i = 0; i < numRead; i++) {
-            buf.push_back(tempBuf[i]);
-        }
+    //     // Transfer read data to buf.
+    //     for (int i = 0; i < numRead; i++) {
+    //         buf.push_back(tempBuf[i]);
+    //     }
 
-        // Check if full message was acquired.
-        if (buf.size() == 14 && buf[buf.size() - 1] == '\n' && buf[0] == '+') {
-            buf.clear();
-            tempBuf.clear();
-            break;
-        } else {
-            // Clear tempBuf and try again.
-            tempBuf.clear();
-        }
-    }
-
-std::cout << "End of notify master.\n";
+    //     // Check if full message was acquired.
+    //     if (buf.size() == 14 && buf[buf.size() - 1] == '\n' && buf[0] == '+') {
+    //         buf.clear();
+    //         tempBuf.clear();
+    //         break;
+    //     } else {
+    //         // Clear tempBuf and try again.
+    //         tempBuf.clear();
+    //     }
+    // }
 
     close(openFD);
 }
