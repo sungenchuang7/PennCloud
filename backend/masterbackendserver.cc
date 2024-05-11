@@ -1343,6 +1343,17 @@ void RCVY_handler(std::string command, int socket_fd)
     { // if all other nodes in the group are dead, the revived node becomes the primary
         group_primary_map.at(group_no) = serverID_to_lookup;
     }
+    auto it = pseudo_killed_nodes.find(serverID_to_lookup);
+    if (it != pseudo_killed_nodes.end())
+    {
+        pseudo_killed_nodes.erase(it);
+        std::cout << serverID_to_lookup << " has been removed from the set." << std::endl;
+    }
+    else
+    {
+        std::cout << serverID_to_lookup << " is not found in the set." << std::endl;
+    }
+
     pthread_mutex_unlock(&server_status_map_mutex);
     response = "+OK node marked as alive\r\n";
     write_helper(socket_fd, response);
