@@ -348,149 +348,151 @@ std::vector<std::tuple<std::string, std::string, std::string>> get_frontend_serv
   // Return vector of tuples {server_address, status, num_clients}
   return servers;
 }
-std::vector<std::tuple<std::string, std::string>> get_kvs_pairs()
+std::vector<std::tuple<std::string, std::string>> get_kvs_pairs(int group)
 {
   std::vector<std::tuple<std::string, std::string>> pairs;
 
   // Create socket connection with master server
   int sock = socket(PF_INET, SOCK_STREAM, 0);
-  struct sockaddr_in serveraddr;
-  bzero(&serveraddr, sizeof(serveraddr));
-  serveraddr.sin_family = AF_INET;
-  inet_pton(AF_INET, MASTER_SERVER_ADDR.c_str(), &serveraddr.sin_addr);
-  serveraddr.sin_port = htons(MASTER_SERVER_PORT);
+  struct sockaddr_in master_serveraddr;
+  bzero(&master_serveraddr, sizeof(master_serveraddr));
+  master_serveraddr.sin_family = AF_INET;
+  inet_pton(AF_INET, MASTER_SERVER_ADDR.c_str(), &master_serveraddr.sin_addr);
+  master_serveraddr.sin_port = htons(MASTER_SERVER_PORT);
 
   // Connect to master backend
-  if (connect(sock, (struct sockaddr *)&serveraddr, sizeof(serveraddr)) < 0)
+  if (connect(sock, (struct sockaddr *)&master_serveraddr, sizeof(master_serveraddr)) < 0)
   {
     return {};
   }
 
   // Ping master server for backend server address for each replica group
-  std::string replica1_addr = get_backend_address("a");
-  std::string replica2_addr = get_backend_address("j");
-  std::string replica3_addr = get_backend_address("s");
+  std::string backend_addr;
+  if (group == 1)
+  {
+    backend_addr = get_backend_address("a");
+  }
+  else if (group == 2)
+  {
+    backend_addr = get_backend_address("j");
+  }
 
-  int replica1_port = std::stoi(replica1_addr.substr(replica1_addr.find(":") + 1));
-  int replica2_port = std::stoi(replica2_addr.substr(replica2_addr.find(":") + 1));
-  int replica3_port = std::stoi(replica3_addr.substr(replica3_addr.find(":") + 1));
+  else if (group == 3)
+  {
+    backend_addr = get_backend_address("s");
+  }
 
-  std::cerr << "replica1_addr: " << replica1_addr << std::endl;
-  std::cerr << "replica2_addr: " << replica2_addr << std::endl;
-  std::cerr << "replica3_addr: " << replica3_addr << std::endl;
+  if (backend_addr.substr(0, 5) == "--ERR")
+  {
+    return {};
+  }
 
-  std::vector<int> replica_ports = {replica1_port, replica2_port, replica3_port};
-
-  // Make a PAIR request to each backend server
+  int backend_port = std::stoi(backend_addr.substr(backend_addr.find(":") + 1));
+  // Make a PAIR request to backend server
   std::string request = "PAIR\r\n";
 
-  for (int p : replica_ports)
+  int s = socket(PF_INET, SOCK_STREAM, 0);
+  struct sockaddr_in serveraddr;
+  bzero(&serveraddr, sizeof(serveraddr));
+  serveraddr.sin_family = AF_INET;
+  inet_pton(AF_INET, MASTER_SERVER_ADDR.c_str(), &serveraddr.sin_addr);
+  serveraddr.sin_port = htons(backend_port);
+
+  if (connect(s, (struct sockaddr *)&serveraddr, sizeof(serveraddr)) < 0)
   {
-
-    int s = socket(PF_INET, SOCK_STREAM, 0);
-    struct sockaddr_in serveraddr;
-    bzero(&serveraddr, sizeof(serveraddr));
-    serveraddr.sin_family = AF_INET;
-    inet_pton(AF_INET, MASTER_SERVER_ADDR.c_str(), &serveraddr.sin_addr);
-    serveraddr.sin_port = htons(p);
-
-    if (connect(s, (struct sockaddr *)&serveraddr, sizeof(serveraddr)) < 0)
-    {
-      return {};
-    }
-
-    write(s, request.c_str(), request.length());
-
-    // Read response from server
-    char buffer[MAX_BUFF_SIZE];
-    int end_index = 0;
-    bool has_full_command = false;
-    std::string command;
-
-    // Read from server for line that ends in <CRLF>
-    while (!has_full_command)
-    {
-      char c;
-      if (read(s, &c, 1) > 0)
-      {
-        buffer[end_index] = c;
-
-        if (end_index >= 1 && c == '\n' && buffer[end_index - 1] == '\r')
-        {
-          has_full_command = true;
-          buffer[end_index - 1] = '\0'; // Replace \r\n with \0
-          command = buffer;
-        }
-
-        end_index++;
-      }
-    }
-    std::cerr << "command: " << command << std::endl;
-
-    if (command.length() < 3 || command.substr(0, 3) != "+OK")
-    {
-      return {};
-    }
-
-    // Read for kv pairs
-    bzero(buffer, MAX_BUFF_SIZE);
-    has_full_command = false;
-    end_index = 0;
-
-    while (!has_full_command)
-    {
-      char c;
-      if (read(s, &c, 1) > 0)
-      {
-        buffer[end_index] = c;
-
-        if (end_index >= 1 && c == '\n' && buffer[end_index - 1] == '\r')
-        {
-          has_full_command = true;
-          buffer[end_index - 1] = '\0'; // Replace \r\n with \0
-          command = buffer;
-        }
-
-        end_index++;
-      }
-    }
-
-    std::cerr << "command: " << command << std::endl;
-
-    // Remove +OK from response
-    if (command.length() > 4)
-    {
-      command = command.substr(4);
-      // Parse response
-      // Split response by :
-      std::string delimiter = ":";
-      size_t pos = 0;
-      std::string token;
-      while ((pos = command.find(delimiter)) != std::string::npos)
-      {
-        token = command.substr(0, pos);
-        // Split token by ,
-        std::string row = token.substr(0, token.find(","));
-        std::string col = token.substr(token.find(",") + 1);
-        pairs.push_back(std::make_tuple(row, col));
-        command.erase(0, pos + delimiter.length());
-      }
-
-      if (command.length() > 0)
-      {
-        // Split token by ,
-        std::string row = command.substr(0, command.find(","));
-        std::string col = command.substr(command.find(",") + 1);
-        pairs.push_back(std::make_tuple(row, col));
-      }
-    }
-    std::cerr << "kv pairs after: " << p << std::endl;
-    for (auto pair : pairs)
-    {
-      std::cerr << std::get<0>(pair) << " " << std::get<1>(pair) << std::endl;
-    }
-    close(s);
+    return {};
   }
+
+  write(s, request.c_str(), request.length());
+
+  // Read response from server
+  char buffer[MAX_BUFF_SIZE];
+  int end_index = 0;
+  bool has_full_command = false;
+  std::string command;
+
+  // Read from server for line that ends in <CRLF>
+  while (!has_full_command)
+  {
+    char c;
+    if (read(s, &c, 1) > 0)
+    {
+      buffer[end_index] = c;
+
+      if (end_index >= 1 && c == '\n' && buffer[end_index - 1] == '\r')
+      {
+        has_full_command = true;
+        buffer[end_index - 1] = '\0'; // Replace \r\n with \0
+        command = buffer;
+      }
+
+      end_index++;
+    }
+  }
+  // std::cerr << "command: " << command << std::endl;
+
+  if (command.length() < 3 || command.substr(0, 3) != "+OK")
+  {
+    return {};
+  }
+
+  // Read for kv pairs
+  bzero(buffer, MAX_BUFF_SIZE);
+  has_full_command = false;
+  end_index = 0;
+
+  while (!has_full_command)
+  {
+    char c;
+    if (read(s, &c, 1) > 0)
+    {
+      buffer[end_index] = c;
+
+      if (end_index >= 1 && c == '\n' && buffer[end_index - 1] == '\r')
+      {
+        has_full_command = true;
+        buffer[end_index - 1] = '\0'; // Replace \r\n with \0
+        command = buffer;
+      }
+
+      end_index++;
+    }
+  }
+
+  // std::cerr << "command: " << command << std::endl;
+
+  // Remove +OK from response
+  if (command.length() > 4)
+  {
+    command = command.substr(4);
+    // Parse response
+    // Split response by :
+    std::string delimiter = ":";
+    size_t pos = 0;
+    std::string token;
+    while ((pos = command.find(delimiter)) != std::string::npos)
+    {
+      token = command.substr(0, pos);
+      // Split token by ,
+      std::string row = token.substr(0, token.find(","));
+      std::string col = token.substr(token.find(",") + 1);
+      pairs.push_back(std::make_tuple(row, col));
+      command.erase(0, pos + delimiter.length());
+    }
+
+    if (command.length() > 0)
+    {
+      // Split token by ,
+      std::string row = command.substr(0, command.find(","));
+      std::string col = command.substr(command.find(",") + 1);
+      pairs.push_back(std::make_tuple(row, col));
+    }
+  }
+  // for (auto pair : pairs)
+  // {
+  //   std::cerr << std::get<0>(pair) << " " << std::get<1>(pair) << std::endl;
+  // }
+  close(s);
 
   // Return vector of tuples {row, col, value}
   return pairs;
@@ -1425,20 +1427,21 @@ std::tuple<std::string, std::string, std::string> get_admin(ReqInitLine *req_ini
   message_body.insert(insert_index + insert_tag.length(), frontend_server_script);
 
   // Get key value pairs
-  std::cerr << "Getting key value pairs" << std::endl;
-  std::vector<std::tuple<std::string, std::string>> kv_pairs = get_kvs_pairs();
-  std::cerr << "After key value pairs" << std::endl;
-  std::string kv_script = "\nconst kv_pairs = [\n";
-  for (auto const &kv : kv_pairs)
+  for (int i = 1; i <= 3; i++)
   {
-    kv_script += "{";
-    kv_script += "rowkey: \"" + std::get<0>(kv) + "\",";
-    kv_script += "columnkey: \"" + std::get<1>(kv) + "\",";
-    kv_script += "},\n";
-  }
-  kv_script += "];\n";
+    std::vector<std::tuple<std::string, std::string>> kv_pairs = get_kvs_pairs(i);
+    std::string kv_script = "\nconst kv_pairs" + std::string("_") + std::to_string(i) + " = [\n";
+    for (auto const &kv : kv_pairs)
+    {
+      kv_script += "{";
+      kv_script += "rowkey: \"" + std::get<0>(kv) + "\",";
+      kv_script += "columnkey: \"" + std::get<1>(kv) + "\",";
+      kv_script += "},\n";
+    }
+    kv_script += "];\n";
 
-  message_body.insert(insert_index + insert_tag.length(), kv_script);
+    message_body.insert(insert_index + insert_tag.length(), kv_script);
+  }
 
   // Create inital response line
   std::string init_response = req_init_line->version + " 200 OK\r\n";

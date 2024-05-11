@@ -72,9 +72,19 @@
             -->
         </table>
         <h2>Web Storage Data</h2>
-        <ul id="key-value-list">
+        <h3>Replication Group 1</h3>
+        <ul id="key-value-list-1">
             <!-- kv pairs-->
         </ul>
+        <h3>Replication Group 2</h3>
+        <ul id="key-value-list-2">
+            <!-- kv pairs-->
+        </ul>
+        <h3>Replication Group 3</h3>
+        <ul id="key-value-list-3">
+            <!-- kv pairs-->
+        </ul>
+        <h4 id="bytes-header"></h4>
         <p id="bytes"></p>
     </div>
     <script>
@@ -92,7 +102,17 @@
         //     { server_address: "127.0.0.1:8082", status: "Alive", num_connections: 3},
         // ];
 
-        // const kv_pairs = [
+        // const kv_pairs_1 = [
+        //     { rowkey: "key1", columnkey: "column1" },
+        //     { rowkey: "key2", columnkey: "column2" },
+        // ];
+
+        // const kv_pairs_2 = [
+        //     { rowkey: "key1", columnkey: "column1" },
+        //     { rowkey: "key2", columnkey: "column2" },
+        // ];
+
+        // const kv_pairs_3 = [
         //     { rowkey: "key1", columnkey: "column1" },
         //     { rowkey: "key2", columnkey: "column2" },
         // ];
@@ -122,6 +142,7 @@
                 .then(text => {
                     console.log('Bytes for ' + rowkey + "," + columnkey, text);
                     document.getElementById('bytes').innerText = text;
+                    document.getElementById('bytes-header').innerText = 'Bytes for ' + rowkey + "," + columnkey;
                 })
                 .catch(error => {
                     console.error('There was a problem with the POST request:', error);
@@ -224,9 +245,11 @@
             }
 
             // Write in key value pairs for each replication group
-            const kv_pairs_ele = document.getElementById('key-value-list');
+            const kv_pairs_ele_1 = document.getElementById('key-value-list-1');
+            const kv_pairs_ele_2 = document.getElementById('key-value-list-2');
+            const kv_pairs_ele_3 = document.getElementById('key-value-list-3');
 
-            kv_pairs.forEach(kv_pair => {
+            kv_pairs_1.forEach(kv_pair => {
                 const listItem = document.createElement('li');
                 const button = document.createElement('button');
 
@@ -243,7 +266,47 @@
                 });
 
                 listItem.appendChild(button);
-                kv_pairs_ele.appendChild(listItem);
+                kv_pairs_ele_1.appendChild(listItem);
+            });
+
+            kv_pairs_2.forEach(kv_pair => {
+                const listItem = document.createElement('li');
+                const button = document.createElement('button');
+
+                button.setAttribute('data-rowkey', kv_pair.rowkey);
+                button.setAttribute('data-columnkey', kv_pair.columnkey);
+
+                button.className = 'bytes-button';
+                button.textContent = `${kv_pair.rowkey}, ${kv_pair.columnkey}`;
+
+                button.addEventListener('click', function () {
+                    const rowkey = this.getAttribute('data-rowkey');
+                    const columnkey = this.getAttribute('data-columnkey');
+                    displayBytes(rowkey, columnkey);
+                });
+
+                listItem.appendChild(button);
+                kv_pairs_ele_2.appendChild(listItem);
+            });
+
+            kv_pairs_3.forEach(kv_pair => {
+                const listItem = document.createElement('li');
+                const button = document.createElement('button');
+
+                button.setAttribute('data-rowkey', kv_pair.rowkey);
+                button.setAttribute('data-columnkey', kv_pair.columnkey);
+
+                button.className = 'bytes-button';
+                button.textContent = `${kv_pair.rowkey}, ${kv_pair.columnkey}`;
+
+                button.addEventListener('click', function () {
+                    const rowkey = this.getAttribute('data-rowkey');
+                    const columnkey = this.getAttribute('data-columnkey');
+                    displayBytes(rowkey, columnkey);
+                });
+
+                listItem.appendChild(button);
+                kv_pairs_ele_3.appendChild(listItem);
             });
 
 
