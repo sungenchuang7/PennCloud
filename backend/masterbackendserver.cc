@@ -1466,7 +1466,7 @@ std::vector<std::string> get_list_of_active_secondaries(int group_no)
     std::vector<std::string> res;
     for (std::string serverID : tablet_storage_map.at(group_no))
     {
-        if (serverID != group_primary_map.at(group_no) || server_status_map.at(serverID))
+        if (serverID != group_primary_map.at(group_no) && server_status_map.at(serverID) && pseudo_killed_nodes.count(serverID) == 0)
         {
             res.push_back(serverID);
         }
