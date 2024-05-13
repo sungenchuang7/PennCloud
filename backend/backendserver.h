@@ -104,3 +104,6 @@ void requestData(std::string primary, std::string updtArgument);
 
 // Notify master of recovery completion.
 void recoveryComplete();
+
+// Update sequence numbers on disk during recovery.
+void updateSequenceNumbers(std::vector<char> primaryResponse);

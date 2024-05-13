@@ -2,6 +2,7 @@
 
 bool vFlag = false, rFlag = false;  // Command line argument flags.
 bool currentPrimary = false;  // Whether or not this node is the current primary.
+std::string primaryAddress;  // Stores the current primary's address.
 int portNumber = 10000;  // This server's port number.
 int myIndex = 1;  // Stores the index of this node within the addresses list.
 int masterPort;  // Stores the master's port number.
@@ -166,13 +167,16 @@ int parseArgs(int argc, char *argv[]) {
         activeNodes.push_back(ipPorts[9]);
     }
 
-    // Assign range of tablets to this node. Used for recovery.
+    // Assign range of tablets and primary address to this node. Used for writes and recovery.
     if (myIndex == 1 || myIndex == 2 || myIndex == 3) {
         myTablets = "abcdefghi";
+        primaryAddress = ipPorts[1];
     } else if (myIndex == 4 || myIndex == 5 || myIndex == 6) {
         myTablets = "jklmnopqr";
+        primaryAddress = ipPorts[4];
     } else if (myIndex == 7 || myIndex == 8 || myIndex == 9) {
         myTablets = "stuvwxyz";
+        primaryAddress = ipPorts[7];
     }
 
     return 0;
@@ -1284,6 +1288,7 @@ void* workerThread(void* connectionInfo) {
                                 std::string updtArgument = "";
                                 std::string nextValue = "";
                                 std::string recoveringNodeAddress = "";
+                                std::string response = "+OK ";
                                 std::vector<std::string> updtArgs;
                                 int characterTracker = 0;
                                 updtArgument.append(buf.begin() + 5, buf.begin() + i);
@@ -1328,6 +1333,7 @@ void* workerThread(void* connectionInfo) {
                                 }
 
                                 for (auto tab : recordCounts) {
+                                    response = response + tab.first + ':' + recordCounts[tab.first] + ':';
                                     if (std::stoi(recordCounts[tab.first]) == std::stoi(receivedRecordCounts[tab.first])) {
                                         // Version number of the previous tablet is the same. Send over log file for this tablet to recover missing entries.
                                         if (logTablet != '0') {
@@ -1339,9 +1345,11 @@ void* workerThread(void* connectionInfo) {
                                         sendCheckpointFile(recoveringNodeAddress, currentCheckpoint, tab.first);
                                     }
                                 }
+                                response = response.substr(0, response.length() - 1);
+                                response += "\r\n";
 
                                 // Reply once all of the data has been sent to the recovering node.
-                                if (write(comm_FD, &okayMessage[0], okayMessage.length()) < 0) {
+                                if (write(comm_FD, &response[0], response.length()) < 0) {
                                     fprintf(stderr, "UPDT failed to write: %s\n", strerror(errno));
                                 }
 
@@ -3068,7 +3076,7 @@ void requestData(std::string primary, std::string updtArgument) {
     // Send command to server.
     write(openFD, &command[0], command.length());
 
-    // Get primary response from server.
+    // Get response from server.
     while (true) {
         numRead = read(openFD, tempBuf.data(), 2000);
 
@@ -3082,8 +3090,10 @@ void requestData(std::string primary, std::string updtArgument) {
         }
 
         // Check if full message was acquired.
-        if (buf.size() == 5 && buf[buf.size() - 1] == '\n' && buf[0] == '+') {
-            // Done. Wait for recovery requests in other threads.
+        if (buf[buf.size() - 1] == '\n' && buf[0] == '+') {
+            // Done. Update version numbers and wait for recovery requests in other threads.
+            updateSequenceNumbers(buf);
+
             buf.clear();
             tempBuf.clear();
             break;
@@ -3170,33 +3180,62 @@ void recoveryComplete() {
         }
     }
 
-    // // Send quit to server.
-    // command = "QUIT\r\n";
-    // write(openFD, &command[0], command.length());
-
-    // // Get response from server.
-    // while (true) {
-    //     numRead = read(openFD, tempBuf.data(), 2000);
-
-    //     if (numRead <= 0) {
-    //         fprintf(stderr, "Server disconnected or error occurred in request primary\n");
-    //     }
-
-    //     // Transfer read data to buf.
-    //     for (int i = 0; i < numRead; i++) {
-    //         buf.push_back(tempBuf[i]);
-    //     }
-
-    //     // Check if full message was acquired.
-    //     if (buf.size() == 14 && buf[buf.size() - 1] == '\n' && buf[0] == '+') {
-    //         buf.clear();
-    //         tempBuf.clear();
-    //         break;
-    //     } else {
-    //         // Clear tempBuf and try again.
-    //         tempBuf.clear();
-    //     }
-    // }
-
     close(openFD);
+}
+
+void updateSequenceNumbers(std::vector<char> primaryResponse) {
+    std::unordered_map<char, std::string> sequenceNumbers;
+    std::string filteredArg(primaryResponse.begin() + 4, primaryResponse.end() - 2);
+    std::stringstream ss(filteredArg);
+    std::string nextValue = "";
+    std::vector<std::string> argValues;
+    char lastChar;
+    int highestSequenceNumber = 0;
+
+    // Parse argument.
+    while (!ss.eof()) {
+        std::getline(ss, nextValue, ':');
+        if (nextValue[nextValue.length() - 1] == '\n') {
+            nextValue = nextValue.substr(0, nextValue.length() - 1);
+        }
+
+        argValues.push_back(nextValue);
+    }
+
+    // Add arguments to map.
+    for (int i = 0; i < argValues.size(); i++) {
+        if ((i % 2) == 0) {
+            // Character key.
+            lastChar = std::tolower(argValues[i][0]);
+        } else {
+            // Sequence number. Update map and highest sequence number.
+            sequenceNumbers[lastChar] = argValues[i];
+
+            if (std::stoi(argValues[i]) > highestSequenceNumber) {
+                highestSequenceNumber = std::stoi(argValues[i]);
+            }
+        }
+    }
+
+    sequenceNumber = highestSequenceNumber;
+
+    for (auto tab : sequenceNumbers) {
+        // Update disk sequence numbers.
+        char myDirectory[PATH_MAX];
+        int currentFD;
+        std::string currentRecord = sequenceNumbers[tab.first];
+        getcwd(myDirectory, sizeof(myDirectory));
+        std::string logDirectory(myDirectory);
+        logDirectory = logDirectory + '/' + "storage_node_" + std::to_string(myIndex) + "/activity_logs/" + "sequence_number_" + tab.first;
+        currentFD = open(logDirectory.data(), O_RDWR | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
+        flock(currentFD, LOCK_EX);
+
+        if (write(currentFD, currentRecord.data(), currentRecord.length()) < 0) {
+            fprintf(stderr, "Failed to log activity to disk: %s\n", strerror(errno));
+        }
+
+        // Release lock and close file.
+        flock(currentFD, LOCK_UN);
+        close(currentFD);
+    }
 }
