@@ -102,6 +102,8 @@ void update_server_status_map_and_group_primary_map(std::string server_key);
 std::vector<std::string> get_alive_servers(int group_no);
 std::string get_alive_servers_string(int group_no);
 bool send_PRIM(int group_no);
+std::vector<std::string> get_list_of_active_secondaries(int group_no);
+bool send_PRIM_to_secondary(std::string secondary_server_ID, std::string current_primary_ID);
 
 //////////////////////////////// RECEIVED COMMAND HANDLERS ////////////////////////////////
 void INIT_handler(std::string command, int socket_fd);
@@ -161,7 +163,7 @@ int main(int argc, char *argv[])
 
     // Setup socket and bind to port
     num_servers = config_serverIDs.size();
-    std::cout << "num_servers: " << num_servers << std::endl;
+    std::cerr << "num_servers: " << num_servers << std::endl;
 
     init_tablet_storage_map();
     init_group_primary_map();
@@ -212,7 +214,7 @@ int main(int argc, char *argv[])
 
         if (debug_mode)
         {
-            std::cout << "starting to loop for new connections from frontend..." << std::endl;
+            std::cerr << "starting to loop for new connections from frontend..." << std::endl;
         }
 
         struct sockaddr_in client_addr;
@@ -223,7 +225,7 @@ int main(int argc, char *argv[])
 
         if (debug_mode)
         {
-            std::cout << "*comm_fd: " << *comm_fd << std::endl;
+            std::cerr << "*comm_fd: " << *comm_fd << std::endl;
         }
 
         add_connection(comm_fd);
@@ -238,7 +240,7 @@ int main(int argc, char *argv[])
 
         if (debug_mode)
         {
-            std::cout << "thread created" << std::endl;
+            std::cerr << "thread created" << std::endl;
         }
         if (debug_mode && create_result)
         {
@@ -246,7 +248,7 @@ int main(int argc, char *argv[])
             break;
         }
         add_tid(thread);
-        std::cout << "tids_vector.size(): " << tids_vector.size() << std::endl;
+        std::cerr << "tids_vector.size(): " << tids_vector.size() << std::endl;
     }
 
     return 0;
@@ -265,7 +267,7 @@ void *frontend_thread_func(void *arg)
 
     // int socket_fd = ((thread_args *)arg)->socket_fd;
     int socket_fd = *((int *)arg);
-    std::cout << "inside frontend_thread_func, socket_fd: " << socket_fd << std::endl;
+    std::cerr << "inside frontend_thread_func, socket_fd: " << socket_fd << std::endl;
 
     std::string buffer, command;
     ssize_t bytes_read;
@@ -292,7 +294,7 @@ void *frontend_thread_func(void *arg)
     //////// Start reading from the client
     while (!quit_received)
     {
-        std::cout << "entering while loop here" << std::endl;
+        std::cerr << "entering while loop here" << std::endl;
         if (shut_down_flag)
         {
             close(socket_fd);
@@ -300,10 +302,10 @@ void *frontend_thread_func(void *arg)
             return NULL;
         }
         bytes_read = read(socket_fd, read_buffer, sizeof(read_buffer) - 1); // QUESTION: why doesn't read return 0 when SIGINT handler close the socket
-        std::cout << "read in worker just unblocked" << std::endl;
+        std::cerr << "read in worker just unblocked" << std::endl;
         if (sigusr1_flag == 1)
         {
-            std::cout << "sigusr1_flag == 1, should terminate thread" << std::endl;
+            std::cerr << "sigusr1_flag == 1, should terminate thread" << std::endl;
             close(socket_fd);
             remove_connection(socket_fd);
             return NULL;
@@ -314,7 +316,7 @@ void *frontend_thread_func(void *arg)
             {
                 if (verbose_mode)
                 {
-                    std::cout << "Socket has been closed." << std::endl;
+                    std::cerr << "Socket has been closed." << std::endl;
                 }
             }
             else
@@ -330,7 +332,7 @@ void *frontend_thread_func(void *arg)
         {
             if (verbose_mode)
             {
-                std::cout << "Client closed connection" << std::endl;
+                std::cerr << "Client closed connection" << std::endl;
             }
             break;
         }
@@ -340,7 +342,7 @@ void *frontend_thread_func(void *arg)
         verbose_print_helper_client(socket_fd, buffer);
         if (debug_mode)
         {
-            std::cout << "buffer so far:" << buffer << std::endl;
+            std::cerr << "buffer so far:" << buffer << std::endl;
         }
 
         if (shut_down_flag)
@@ -359,7 +361,7 @@ void *frontend_thread_func(void *arg)
 
             if (debug_mode)
             {
-                std::cout << "buffer after erase() now: " << buffer << std::endl;
+                std::cerr << "buffer after erase() now: " << buffer << std::endl;
             }
             // Convert the first 4 characters to lowercase to handle case-insensitive commands
             for (size_t i = 0; i < command.length() && i < 4; ++i)
@@ -413,13 +415,13 @@ void *frontend_thread_func(void *arg)
 
     close(socket_fd);
     remove_connection(socket_fd);
-    // std::cout << "Thread dying detached!" << std::endl;
+    // std::cerr << "Thread dying detached!" << std::endl;
     return NULL;
 }
 
 void add_connection(int *socket_fd)
 {
-    std::cout << "add_connection() starts" << std::endl;
+    std::cerr << "add_connection() starts" << std::endl;
     pthread_mutex_lock(&connections_mutex);
     comm_fds_vector.push_back(socket_fd);
     pthread_mutex_unlock(&connections_mutex);
@@ -437,7 +439,7 @@ void remove_connection(int socket_fd)
             comm_fds_vector.at(i) = nullptr; // see if it works
             index = i;
 
-            std::cout << "server is calling free() to release resources..." << std::endl;
+            std::cerr << "server is calling free() to release resources..." << std::endl;
             comm_fds_vector.erase(comm_fds_vector.begin() + i);
             break;
         }
@@ -447,13 +449,13 @@ void remove_connection(int socket_fd)
 
 void shutdown_server(int signum)
 {
-    std::cout << "SIGINT received!!" << std::endl;
+    std::cerr << "SIGINT received!!" << std::endl;
     shut_down_flag = 1; // sets global shutdown flag to true
 
     if (debug_mode)
     {
-        std::cout << "comm_fds_vector.size(): " << comm_fds_vector.size() << std::endl;
-        std::cout << "tids_vector.size(): " << tids_vector.size() << std::endl;
+        std::cerr << "comm_fds_vector.size(): " << comm_fds_vector.size() << std::endl;
+        std::cerr << "tids_vector.size(): " << tids_vector.size() << std::endl;
     }
 
     pthread_mutex_lock(&connections_mutex);
@@ -467,9 +469,9 @@ void shutdown_server(int signum)
         {
             std::cerr << "About to pthread_kill tids_vector.at(" << i << "): " << tids_vector.at(i) << std::endl;
         }
-        std::cout << "SIGUSR1 will be sent soon..." << std::endl;
+        std::cerr << "SIGUSR1 will be sent soon..." << std::endl;
         int kill_result = pthread_kill(tids_vector.at(i), SIGUSR1);
-        std::cout << "SIGUSR1 is sent..." << std::endl;
+        std::cerr << "SIGUSR1 is sent..." << std::endl;
         if (debug_mode && kill_result)
         {
             std::cerr << "pthread_kill failed..." << std::endl;
@@ -478,8 +480,8 @@ void shutdown_server(int signum)
 
     if (debug_mode)
     {
-        std::cout << "heartbeat_threads.size(): " << heartbeat_threads.size() << std::endl;
-        std::cout << "heartbeat_tid_socket_map.size(): " << heartbeat_tid_socket_map.size() << std::endl;
+        std::cerr << "heartbeat_threads.size(): " << heartbeat_threads.size() << std::endl;
+        std::cerr << "heartbeat_tid_socket_map.size(): " << heartbeat_tid_socket_map.size() << std::endl;
     }
 
     for (const auto &pair : heartbeat_tid_socket_map)
@@ -491,13 +493,13 @@ void shutdown_server(int signum)
         if (debug_mode)
         {
             std::cerr << "About to pthread_kill tid: " << pair.first << std::endl;
-            std::cout << "SIGUSR1 will be sent soon..." << std::endl;
+            std::cerr << "SIGUSR1 will be sent soon..." << std::endl;
         }
 
         int kill_result = pthread_kill(pair.first, SIGUSR1);
         if (debug_mode)
         {
-            std::cout << "SIGUSR1 is sent..." << std::endl;
+            std::cerr << "SIGUSR1 is sent..." << std::endl;
             if (kill_result)
             {
                 std::cerr << "pthread_kill failed..." << std::endl;
@@ -508,7 +510,7 @@ void shutdown_server(int signum)
 
     if (debug_mode)
     {
-        std::cout << "About to call pthread_join in SIGINT handler" << std::endl;
+        std::cerr << "About to call pthread_join in SIGINT handler" << std::endl;
     }
     // make sure tids_vector is not modified to be empty at this point
     for (auto tid : tids_vector) // fix this first, make sure pthread_join is called
@@ -521,7 +523,7 @@ void shutdown_server(int signum)
     }
     if (debug_mode)
     {
-        std::cout << "all frontend threads joined inside SIGINT handler" << std::endl;
+        std::cerr << "all frontend threads joined inside SIGINT handler" << std::endl;
     }
 
     for (const auto &pair : heartbeat_tid_socket_map) // fix this first, make sure pthread_join is called
@@ -534,7 +536,7 @@ void shutdown_server(int signum)
     }
     if (debug_mode)
     {
-        std::cout << "all backend heartbeat threads joined inside SIGINT handler" << std::endl;
+        std::cerr << "all backend heartbeat threads joined inside SIGINT handler" << std::endl;
     }
 
     close(listen_fd);
@@ -610,7 +612,7 @@ bool write_helper(int socket_fd, std::string msg)
 void SIGUSR1_handler(int signum)
 {
     sigusr1_flag = 1;
-    std::cout << "SIGUSR1 received!" << std::endl;
+    std::cerr << "SIGUSR1 received!" << std::endl;
 }
 
 void add_tid(pthread_t tid)
@@ -697,7 +699,7 @@ void parse_args(int argc, char *argv[])
             break;
         case 'd':
             debug_mode = true;
-            std::cout << "setting debug_mode to true" << std::endl;
+            std::cerr << "setting debug_mode to true" << std::endl;
             break;
         default:
             std::cerr << "Usage: " << argv[0] << " -p <portno> (-a) (-v)\n";
@@ -707,7 +709,7 @@ void parse_args(int argc, char *argv[])
     config_file_path = argv[optind++];
     if (debug_mode)
     {
-        std::cout << "config file used is: " << config_file_path << std::endl;
+        std::cerr << "config file used is: " << config_file_path << std::endl;
     }
 }
 
@@ -1014,13 +1016,13 @@ void update_server_status_map_and_group_primary_map(std::string server_key)
         pthread_mutex_unlock(&server_status_map_mutex);
         return; // don't have to mark it as down again
     }
-    std::cout << server_key << " is down!" << std::endl;
+    std::cerr << server_key << " is down!" << std::endl;
     server_status_map.at(server_key) = false;         // update the status of the server to be dead
     int group_no = serverID_group_map.at(server_key); // get the replication group number of the server
     int iteration_counter = 0;
     if (group_primary_map.at(group_no) == server_key) // if the detected down node is the primary of the group
     {
-        std::cout << server_key << " is actually the primary!" << std::endl;
+        std::cerr << server_key << " is actually the primary!" << std::endl;
         // pick the front node in the group server list as potential new primary
         std::string candidate_primary = tablet_storage_map.at(group_no).front();
         // while this node is also down
@@ -1042,12 +1044,26 @@ void update_server_status_map_and_group_primary_map(std::string server_key)
             }
         }
         group_primary_map.at(group_no) = candidate_primary;
-        std::cout << "new_primary: " << candidate_primary << std::endl;
+        std::cerr << "new_primary: " << candidate_primary << std::endl;
+        if (!send_PRIM(group_no))
+        {
+            std::cerr << "send_PRIM failed... " << std::endl;
+        }
+        // get active secondary node list
+        std::vector<std::string> list_of_active_secondaries = get_list_of_active_secondaries(group_no);
+        for (std::string secondaryID : list_of_active_secondaries) {
+            if (!send_PRIM_to_secondary(secondaryID, group_primary_map.at(group_no))){
+                std::cerr << "Error sending PRIM to secondary at: " << secondaryID << std::endl;
+            }
+        }
+        
     }
-
-    if (!send_PRIM(group_no))
+    else
     {
-        std::cerr << "send_PRIM failed... " << std::endl;
+        if (!send_PRIM(group_no))
+        {
+            std::cerr << "Error sending PRIM to primary of group no: " << group_no << std::endl;
+        }
     }
 
     // create_socket_send_helper(group_primary_map.at(group_no), )
@@ -1109,7 +1125,7 @@ bool create_socket_send_helper(std::string serverID, std::string message, std::s
     char *buffer;
     read_until_crlf(sockfd, &buffer);
     std::string actual_server_response{buffer};
-    std::cout << "(cssh) actual_server_response: " << actual_server_response << std::endl;
+    std::cerr << "(cssh) actual_server_response: " << actual_server_response << std::endl;
     close(sockfd);
     if (expected_server_response == actual_server_response)
     {
@@ -1161,7 +1177,7 @@ bool send_PRIM(int group_no)
 {
     // get the latest list of active nodes in a group
     std::string alive_servers_string = get_alive_servers_string(group_no);
-    std::string PRIM_message = "PRIM:" + alive_servers_string + "\r\n";
+    std::string PRIM_message = "PRIM:1," + alive_servers_string + "\r\n";
     std::string expected_response = "+OK Primary updated\r\n";
 
     std::cerr << "send_PRIM here?" << std::endl;
@@ -1245,7 +1261,7 @@ void STAT_handler(int socket_fd)
 void GTPM_handler(std::string command, int socket_fd)
 {
     std::string response = "";
-    std::cout << "here1" << std::endl;
+    std::cerr << "here1" << std::endl;
     std::vector<std::string> command_tokens = split_string(command, ","); // INIT,linhphan -> {INIT, linhphan}
     if (command_tokens.size() != 2)
     {
@@ -1262,7 +1278,7 @@ void GTPM_handler(std::string command, int socket_fd)
         verbose_print_helper_server(socket_fd, response);
         return;
     }
-    std::cout << "here2" << std::endl;
+    std::cerr << "here2" << std::endl;
     int server_group_no = serverID_group_map.at(serverID_to_lookup);
     ////
     if (group_primary_map.at(server_group_no) == "all_dead")
@@ -1327,8 +1343,8 @@ void RCVY_handler(std::string command, int socket_fd)
         verbose_print_helper_server(socket_fd, response);
         return;
     }
-    std::string serverID_to_lookup = command_tokens.at(1);
-    if (serverID_group_map.count(serverID_to_lookup) == 0)
+    std::string serverID_to_mark_as_alive = command_tokens.at(1);
+    if (serverID_group_map.count(serverID_to_mark_as_alive) == 0)
     {
         response = "-ERR Invalid server address\r\n";
         write_helper(socket_fd, response);
@@ -1338,20 +1354,20 @@ void RCVY_handler(std::string command, int socket_fd)
     // down_servers.erase(command_tokens.at(1));
     pthread_mutex_lock(&server_status_map_mutex);
     server_status_map.at(command_tokens.at(1)) = true;
-    int group_no = serverID_group_map.at(serverID_to_lookup);
+    int group_no = serverID_group_map.at(serverID_to_mark_as_alive);
     if (group_primary_map.at(group_no) == "all_dead")
     { // if all other nodes in the group are dead, the revived node becomes the primary
-        group_primary_map.at(group_no) = serverID_to_lookup;
+        group_primary_map.at(group_no) = serverID_to_mark_as_alive;
     }
-    auto it = pseudo_killed_nodes.find(serverID_to_lookup);
+    auto it = pseudo_killed_nodes.find(serverID_to_mark_as_alive);
     if (it != pseudo_killed_nodes.end())
     {
         pseudo_killed_nodes.erase(it);
-        std::cout << serverID_to_lookup << " has been removed from the set." << std::endl;
+        std::cerr << serverID_to_mark_as_alive << " has been removed from the set." << std::endl;
     }
     else
     {
-        std::cout << serverID_to_lookup << " is not found in the set." << std::endl;
+        std::cerr << serverID_to_mark_as_alive << " is not found in the set." << std::endl;
     }
 
     pthread_mutex_unlock(&server_status_map_mutex);
@@ -1387,6 +1403,7 @@ void KILL_handler(std::string command, int socket_fd)
         pseudo_killed_nodes.insert(serverID_to_shutdown);
         std::cerr << "(KILL handler) +OK shutting down received" << std::endl;
         response = "+OK storage server shutdown requested\r\n";
+        std::cerr << "KILL: response: " << response << std::endl;
         write_helper(socket_fd, response);
         verbose_print_helper_server(socket_fd, response);
         update_server_status_map_and_group_primary_map(serverID_to_shutdown);
@@ -1394,6 +1411,7 @@ void KILL_handler(std::string command, int socket_fd)
     else
     {
         response = "-ERR unable to request storage server shutdown\r\n";
+        std::cerr << "KILL: response: " << response << std::endl;
         write_helper(socket_fd, response);
         verbose_print_helper_server(socket_fd, response);
     }
@@ -1441,4 +1459,30 @@ void QUIT_handler(int socket_fd, bool &quit_received)
     write_helper(socket_fd, response);
     verbose_print_helper_server(socket_fd, response);
     quit_received = true;
+}
+
+std::vector<std::string> get_list_of_active_secondaries(int group_no)
+{
+    std::vector<std::string> res;
+    for (std::string serverID : tablet_storage_map.at(group_no))
+    {
+        if (serverID != group_primary_map.at(group_no) || server_status_map.at(serverID))
+        {
+            res.push_back(serverID);
+        }
+    }
+    return res;
+}
+
+/// @brief Send PRIM:0,current_primary_ID to a secondary node
+/// @param secondary_server_ID 
+/// @param current_primary_ID 
+/// @return true if successful, false if secondary did not send back expected response
+bool send_PRIM_to_secondary(std::string secondary_server_ID, std::string current_primary_ID) {
+    std::string expected_server_response = "+OK Primary updated\r\n";
+    std::string message_to_send = "PRIM:0," + current_primary_ID;
+    if (!create_socket_send_helper(secondary_server_ID, message_to_send, expected_server_response)) {
+        return false;
+    }
+    return true;
 }
