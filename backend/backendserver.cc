@@ -247,11 +247,6 @@ void connectionManager() {
 
             // Create new thread with new connection.
             if (serverShutDown == false && nextThreadDetails->connectionFD != -1) {
-                // New connection debugger output.
-                if (vFlag == true) {
-                    fprintf(stderr, "[%d] New connection\n", nextThreadDetails->connectionFD);
-                }
-
                 // Dispatch thread to handle this connection.
                 pthread_create(&activeThreads[nextThreadDetails->myIndex], NULL, workerThread, nextThreadDetails);
             } else {
@@ -270,12 +265,6 @@ void connectionManager() {
                         std::cerr << "pthread_join failed." << std::endl;
                     }
                     availableThreadIndices.push_back(closedConnections[i]);
-
-                    // Debugger output, thread joining information.
-                    if (vFlag == true) {
-                        fprintf(stderr, "[Normal Cleanup] Join on thread number:  %d\n", closedConnections[i]);
-                        fprintf(stderr, "[Normal Cleanup] Available threads:  %lu\n", availableThreadIndices.size());
-                    }
                 }
 
                 // Empty closedConnections vector.
@@ -298,12 +287,6 @@ void connectionManager() {
                     std::cerr << "pthread_join failed." << std::endl;
                 }
                 availableThreadIndices.push_back(closedConnections[i]);
-
-                // Debugger output, thread joining information.
-                if (vFlag == true) {
-                    fprintf(stderr, "[Shutdown Cleanup] Join on thread number:  %d\n", closedConnections[i]);
-                    fprintf(stderr, "[Shutdown Cleanup] Available threads:  %lu\n", availableThreadIndices.size());
-                }
             }
 
             // Empty closedConnections vector.
@@ -323,10 +306,6 @@ void connectionManager() {
     // Wait for writer thread to exit.
     if (pthread_join(writerThread, nullptr) != 0) {
         std::cerr << "pthread_join failed." << std::endl;
-    } else {
-        if (vFlag == true) {
-            fprintf(stderr, "[Shutdown Cleanup] Join on writer thread.\n");
-        }
     }
 
     // Close file descriptors.
@@ -368,11 +347,6 @@ void* workerThread(void* connectionInfo) {
 
     // Write greeting to client.
     write(comm_FD, &serverGreeting[0], serverGreeting.length());
-
-    // Debugger output - greeting message.
-    if (vFlag == true) {
-        fprintf(stderr, "[%d] S: %s", comm_FD, serverGreeting.data());
-    }
 
     // Maintain connection with client and execute commands.
     while (quitCalled == false) {
@@ -518,6 +492,7 @@ void* workerThread(void* connectionInfo) {
                     saveLogFile(recoveringTablet, valueData);
                     delete valueData;
                     valueData = new std::string("");
+                    logOrCheckpoint = false;
 
                     if (write(comm_FD, &valueAdded[0], valueAdded.length()) < 0) {
                         fprintf(stderr, "DATA failed to write: %s\n", strerror(errno));
@@ -528,6 +503,7 @@ void* workerThread(void* connectionInfo) {
                     saveCheckpointFile(recoveringTablet, valueData);
                     delete valueData;
                     valueData = new std::string("");
+                    logOrCheckpoint = false;
 
                     if (write(comm_FD, &valueAdded[0], valueAdded.length()) < 0) {
                         fprintf(stderr, "DATA failed to write: %s\n", strerror(errno));
@@ -570,10 +546,6 @@ void* workerThread(void* connectionInfo) {
                     }
                 }
 
-                if (vFlag == true) {
-                    fprintf(stderr, "[%d] PUT/CPUT successful at the following location:\n[%d] Row: %s\n[%d] Column: %s\n[%d] Value: %s\n", 
-                            comm_FD, comm_FD, requestedRow.data(), comm_FD, requestedColumn.data(), comm_FD, keyValueStore[requestedRow][requestedColumn]->data());
-                }
                 // Exit DATA processing.
                 dataCalled = false;
             }
@@ -616,14 +588,6 @@ void* workerThread(void* connectionInfo) {
                                 if (write(comm_FD, &invalidCommand[0], invalidCommand.length()) < 0) {
                                     fprintf(stderr, "Failed to write: %s\n", strerror(errno));
                                 }
-
-                                // Debugger output - invalid command.
-                                if (vFlag == true) {
-                                    std::string currentCommand = "";
-                                    currentCommand.append(buf.begin(), buf.begin() + i + 2);
-                                    fprintf(stderr, "[%d] C: %s", comm_FD, currentCommand.data());
-                                    fprintf(stderr, "[%d] S: %s", comm_FD, invalidCommand.data());
-                                }
                             } else if ((buf.size() > 5) &&
                                     (buf[0] == 'q' || buf[0] == 'Q') && 
                                     (buf[1] == 'u' || buf[1] == 'U') && 
@@ -638,13 +602,6 @@ void* workerThread(void* connectionInfo) {
 
                                 // QUIT called, break from loops.
                                 quitCalled = true;
-
-                                // Debugger output - QUIT command.
-                                if (vFlag == true) {
-                                    std::string currentCommand = "";
-                                    currentCommand.append(buf.begin(), buf.begin() + i + 2);
-                                    fprintf(stderr, "[%d] C: %s", comm_FD, currentCommand.data());
-                                }
 
                                 break;
                             } else if ((buf.size() > 5) &&
@@ -711,10 +668,6 @@ void* workerThread(void* connectionInfo) {
                                     pthread_mutex_lock(&activeTabletLock);
                                     readWriteLock.lock();
                                     rwLockPickedUp = true;
-
-                                    if (vFlag == true) {
-                                        fprintf(stderr, "[%d] Unique lock picked up for tablet %c\n", comm_FD, targetTablet);
-                                    }
                                 } else {
                                     fprintf(stderr, "Error: Invalid tablet requested for PUT.\n");
                                 }
@@ -785,10 +738,6 @@ void* workerThread(void* connectionInfo) {
                                     }
 
                                     pthread_mutex_unlock(&activeTabletLock);
-
-                                    if (vFlag == true) {
-                                        fprintf(stderr, "[%d] Shared lock picked up for tablet %c\n", comm_FD, targetTablet);
-                                    }
                                 } else {
                                     fprintf(stderr, "Error: Invalid tablet requested for GET.\n");
                                 }
@@ -809,11 +758,6 @@ void* workerThread(void* connectionInfo) {
                                     }
                                     if (write(comm_FD, &endOutput[0], endOutput.length()) < 0) {
                                         fprintf(stderr, "GET failed to write: %s\n", strerror(errno));
-                                    }
-
-                                    if (vFlag == true) {
-                                        fprintf(stderr, "[%d] GET successful at the following location:\n[%d] Row: %s\n[%d] Column: %s\n[%d] Value: %s\n", 
-                                                comm_FD, comm_FD, requestedRow.data(), comm_FD, requestedColumn.data(), comm_FD, keyValueStore[requestedRow][requestedColumn]->data());
                                     }
                                 } else {
                                     if (write(comm_FD, &invalidValue[0], invalidValue.length()) < 0) {
@@ -869,10 +813,6 @@ void* workerThread(void* connectionInfo) {
                                     if (activeTablet != targetTablet) {
                                         importTablet(targetTablet);
                                         activeTablet = targetTablet;
-                                    }
-
-                                    if (vFlag == true) {
-                                        fprintf(stderr, "[%d] Unique lock picked up for tablet %c\n", comm_FD, targetTablet);
                                     }
                                 } else {
                                     fprintf(stderr, "Error: Invalid tablet requested for DATA.\n");
@@ -1075,10 +1015,6 @@ void* workerThread(void* connectionInfo) {
 
                                     writeToGroup(nodeList, "DELE", requestedRow, requestedColumn, nullptr);
 
-                                    if (vFlag == true) {
-                                        fprintf(stderr, "[%d] DELETE successful at the following location:\n[%d] Row: %s\n[%d] Column: %s\n", 
-                                                comm_FD, comm_FD, requestedRow.data(), comm_FD, requestedColumn.data());
-                                    }
                                     int replicaGroup = 0;
                                     if (myIndex == 1 || myIndex == 2 || myIndex == 3) {
                                         replicaGroup = 1;
@@ -1293,6 +1229,7 @@ void* workerThread(void* connectionInfo) {
                                     break;
                                 }
 
+                                pseudoShutDown = true;
                                 currentPrimary = false;
                                 activeTablet = '0';
 
@@ -1305,7 +1242,6 @@ void* workerThread(void* connectionInfo) {
                                 if (write(comm_FD, stdnResponse.c_str(), stdnResponse.length()) < 0) {
                                     fprintf(stderr, "STDN failed to write: %s\n", strerror(errno));
                                 }
-                                pseudoShutDown = true;
 
                                 char* shutdownSignal = new char;
                                 *shutdownSignal = 'X';
@@ -1392,12 +1328,12 @@ void* workerThread(void* connectionInfo) {
                                 }
 
                                 for (auto tab : recordCounts) {
-                                    if (recordCounts[tab.first] == receivedRecordCounts[tab.first]) {
+                                    if (std::stoi(recordCounts[tab.first]) == std::stoi(receivedRecordCounts[tab.first])) {
                                         // Version number of the previous tablet is the same. Send over log file for this tablet to recover missing entries.
                                         if (logTablet != '0') {
                                             sendLogFileData(recoveringNodeAddress, lastLog, logTablet);
                                         }
-                                    } else if (recordCounts[tab.first] > receivedRecordCounts[tab.first]) {
+                                    } else if (std::stoi(recordCounts[tab.first]) > std::stoi(receivedRecordCounts[tab.first])) {
                                         // A checkpoint occurred while the recovering node was down. Send over the full tablet.
                                         std::vector<char> currentCheckpoint = loadCheckpointFile(tab.first);
                                         sendCheckpointFile(recoveringNodeAddress, currentCheckpoint, tab.first);
@@ -1480,14 +1416,6 @@ void* workerThread(void* connectionInfo) {
                                 if (write(comm_FD, &invalidCommand[0], invalidCommand.length()) < 0) {
                                     fprintf(stderr, "Server failed to write: %s\n", strerror(errno));
                                 }
-
-                                // Debugger output - invalid command.
-                                if (vFlag == true) {
-                                    std::string currentCommand = "";
-                                    currentCommand.append(buf.begin(), buf.begin() + i + 2);
-                                    fprintf(stderr, "[%d] C: %s", comm_FD, currentCommand.data());
-                                    fprintf(stderr, "[%d] S: %s", comm_FD, invalidCommand.data());
-                                }
                             }
 
                             // Remove the previous command from the buffer.
@@ -1519,31 +1447,14 @@ void* workerThread(void* connectionInfo) {
        // Server shutting down. Write message to client and close connection.
        write(comm_FD, &serverShutDownMessage[0], serverShutDownMessage.length());
 
-       // Debugger output - server shutdown enabled and connection closed.
-       if (vFlag == true) {
-           fprintf(stderr, "[%d] S: %s", comm_FD, serverShutDownMessage.c_str());
-           fprintf(stderr, "[%d] Connection closed\n", comm_FD);
-       }
-
        close(comm_FD);
     } else {
        if (clientDisconnected == false) {
            // Quit requested. Send farewell message and close this connection.
            write(comm_FD, &quitMessage[0], quitMessage.length());
-
-           // Debugger output - farewell message.
-           if (vFlag == true) {
-               fprintf(stderr, "[%d] S: %s", comm_FD, quitMessage.c_str());
-           }
        }
        // Close the connection and update active fileDescriptors.
        close(comm_FD);
-
-
-       // Debugger output - connection closed.
-       if (vFlag == true) {
-           fprintf(stderr, "[%d] Connection closed\n", comm_FD);
-       }
     }
 
     // Update active thread information, clean up memory, and exit.
@@ -1614,10 +1525,6 @@ void logActivity(int seqNum, char tablet, std::string action, std::string row, s
     currentFD = open(logDirectory.data(), O_RDWR | O_CREAT | O_APPEND, S_IRUSR | S_IWUSR);
     flock(currentFD, LOCK_EX);
 
-    if (vFlag == true) {
-        fprintf(stderr, "Writing log record to file:%s\n", logDirectory.data());
-    }
-
     if (write(currentFD, currentRecord.data(), currentRecord.length()) < 0) {
         fprintf(stderr, "Failed to log activity to disk: %s\n", strerror(errno));
     }
@@ -1632,10 +1539,6 @@ void logActivity(int seqNum, char tablet, std::string action, std::string row, s
     currentFD = open(seqDirectory.data(), O_RDWR | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
     flock(currentFD, LOCK_EX);
 
-    if (vFlag == true) {
-        fprintf(stderr, "Writing log records to file:%s\n", seqDirectory.data());
-    }
-
     if (write(currentFD, std::to_string(seqNum).data(), std::to_string(seqNum).length()) < 0) {
         fprintf(stderr, "Failed to write activity log to disk: %s\n", strerror(errno));
     }
@@ -1643,17 +1546,9 @@ void logActivity(int seqNum, char tablet, std::string action, std::string row, s
     // Release lock and close file.
     flock(currentFD, LOCK_UN);
     close(currentFD);
-
-    if (vFlag == true) {
-        fprintf(stderr, "Activity recorded: %s", currentRecord.data());
-    }
 }
 
 void checkpointUpdate() {
-    if (vFlag == true) {
-        fprintf(stderr, "Writing checkpoint for tablet: %c\n", activeTablet);
-    }
-
     char myDirectory[PATH_MAX];
     int currentFD;
     getcwd(myDirectory, sizeof(myDirectory));
@@ -1713,11 +1608,6 @@ void* diskUpdatesThread(void* threadInfo) {
         }
 
         if (activeTablet != '0') {
-            // Tablet valid. Perform checkpoint.
-            if (vFlag == true) {
-                fprintf(stderr, "[Writer Thread] Performing checkpoint for tablet %c\n", activeTablet);
-            }
-
             checkpointUpdate();
             
             if (serverShutDown == true) {
@@ -1805,10 +1695,6 @@ void importTablet(char tablet) {
                     // Add string to (row, column).
                     readingValue = false;
                     keyValueStore[currentRow][currentColumn] = new std::string(stringBuffer);
-
-                    if (vFlag == true) {
-                        fprintf(stderr, "Imported row, column: %s, %s\n", currentRow.data(), currentColumn.data());
-                    }
 
                     currentRow = "";
                     currentColumn = "";
@@ -2801,8 +2687,6 @@ void sendLogFileData(std::string node, std::vector<char>& data, char tablet) {
     }
 
     address.sin_family = AF_INET;
-        std::cout << "sendLogFileData stoi\n";
-
     address.sin_port = htons(std::stoi(nodePort));
 
     if (inet_pton(AF_INET, nodeIP.data(), &address.sin_addr) <= 0) {
