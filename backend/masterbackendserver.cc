@@ -1147,7 +1147,7 @@ std::vector<std::string> get_alive_servers(int group_no)
     std::vector<std::string> server_list = tablet_storage_map.at(group_no);
     for (const std::string &serverID : server_list)
     {
-        if (server_status_map.at(serverID))
+        if (server_status_map.at(serverID) && pseudo_killed_nodes.count(serverID) == 0)
         { // if it's alive
             res.push_back(serverID);
         }
