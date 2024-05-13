@@ -1202,6 +1202,7 @@ void* workerThread(void* connectionInfo) {
                                 pthread_mutex_lock(&primaryUpdateLock);
                                 if (buf[5] == '1') {
                                     currentPrimary = true;
+                                    primaryAddress = ipPorts[myIndex];
                                     activeNodes.clear();
 
                                     // Parse the arguments.
@@ -1209,7 +1210,6 @@ void* workerThread(void* connectionInfo) {
                                     std::string nextValue = "";
                                     int indexTracker = 0;
                                     primArgument.append(buf.begin() + 7, buf.begin() + i);
-                                    // std::cout << "PRIM ARGUMENT AFTER 1 FOR PRIMARY HERE:" << primArgument << std::endl;
                                     std::stringstream ss(primArgument);
 
                                     while (!ss.eof()) {
@@ -1231,7 +1231,6 @@ void* workerThread(void* connectionInfo) {
                                     // Parse the arguments.
                                     std::string primArgument = "";
                                     primArgument.append(buf.begin() + 7, buf.begin() + i);
-                                    // std::cout << "PRIM ARGUMENT FOR SECONDARY HERE:" << primArgument << std::endl;
                                     primaryAddress = primArgument;
 
                                     pthread_mutex_unlock(&primaryUpdateLock);
@@ -1282,7 +1281,7 @@ void* workerThread(void* connectionInfo) {
                                     (buf[2] == 't' || buf[2] == 'T') &&
                                     (buf[3] == 't' || buf[3] == 'T') &&
                                     (buf[4] == '\r') &&
-                                    (buf[5] == '\n')) {                            
+                                    (buf[5] == '\n')) {   
                                 if (pseudoShutDown == false) {
                                     // Invalid command received.
                                     if (write(comm_FD, &invalidSequenceOfCommands[0], invalidSequenceOfCommands.length()) < 0) {
@@ -1302,8 +1301,12 @@ void* workerThread(void* connectionInfo) {
                                     (buf[1] == 'p' || buf[1] == 'P') && 
                                     (buf[2] == 'd' || buf[2] == 'D') &&
                                     (buf[3] == 't' || buf[3] == 'T')) {
+                                // Pseudo shutdown enabled. Reject request.
+                                if (pseudoShutDown == true) {
+                                    break;
+                                }
+
                                 pthread_mutex_lock(&activeTabletLock);
-                                // requestedCommand = "RECOVER";
                                 // Parse the arguments.
                                 std::string updtArgument = "";
                                 std::string nextValue = "";
@@ -1410,30 +1413,35 @@ void* workerThread(void* connectionInfo) {
                                     (buf[3] == 'r' || buf[3] == 'R') &&
                                     (buf[4] == '\r') &&
                                     (buf[5] == '\n')) {
+                                // Pseudo shutdown enabled. Reject request.
+                                if (pseudoShutDown == true) {
+                                    break;
+                                }
+
                                 // Return all row, column pairs in this replica group.
-                                    pthread_mutex_lock(&activeTabletLock);
-                                    readWriteLock.lock();
-                                    std::string response = "+OK ";
+                                pthread_mutex_lock(&activeTabletLock);
+                                readWriteLock.lock();
+                                std::string response = "+OK ";
 
-                                    for (int i = 0; i < myTablets.size(); i++) {
-                                        importTablet(myTablets[i]);
+                                for (int i = 0; i < myTablets.size(); i++) {
+                                    importTablet(myTablets[i]);
 
-                                        for (auto row : keyValueStore) {
-                                            for (auto col : keyValueStore[row.first]) {
-                                                response += row.first + ',' + col.first + ':';
-                                            }
+                                    for (auto row : keyValueStore) {
+                                        for (auto col : keyValueStore[row.first]) {
+                                            response += row.first + ',' + col.first + ':';
                                         }
                                     }
+                                }
 
-                                    response = response.substr(0, response.length() - 1);
+                                response = response.substr(0, response.length() - 1);
 
-                                    response += "\r\n";
+                                response += "\r\n";
 
-                                    pthread_mutex_unlock(&activeTabletLock);
-                                    readWriteLock.unlock();
-                                    if (write(comm_FD, &response[0], response.length()) < 0) {
-                                        fprintf(stderr, "PAIR failed to write: %s\n", strerror(errno));
-                                    }
+                                pthread_mutex_unlock(&activeTabletLock);
+                                readWriteLock.unlock();
+                                if (write(comm_FD, &response[0], response.length()) < 0) {
+                                    fprintf(stderr, "PAIR failed to write: %s\n", strerror(errno));
+                                }
                             } else {
                                 // Pseudo shutdown enabled. Reject request.
                                 if (pseudoShutDown == true) {
@@ -1912,6 +1920,9 @@ std::string requestPrimary() {
         }
     }
 
+    // Update primary for this node.
+    primaryAddress = primary;
+
     return primary;
 }
 
@@ -1950,9 +1961,6 @@ bool writeToPrimary(std::string primary, std::string action, std::string row, st
             rawPort += primary[i];
         }
     }
-
-    std::cout << "Primary Address in writeToPrimary:" << ipAddr << std::endl;
-    std::cout << "Primary Port in writeToPrimary:" << rawPort << std::endl;
 
     primaryPort = std::stoi(rawPort);
     address.sin_family = AF_INET;
