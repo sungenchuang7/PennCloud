@@ -104,6 +104,7 @@ std::string get_alive_servers_string(int group_no);
 bool send_PRIM(int group_no);
 std::vector<std::string> get_list_of_active_secondaries(int group_no);
 bool send_PRIM_to_secondary(std::string secondary_server_ID, std::string current_primary_ID);
+void print_address_port_from_socketfd(int socket_fd, std::string msg);
 
 //////////////////////////////// RECEIVED COMMAND HANDLERS ////////////////////////////////
 void INIT_handler(std::string command, int socket_fd);
@@ -566,6 +567,7 @@ void verbose_print_helper_client(const int &socket_fd, const std::string &msg)
 
 bool write_helper(int socket_fd, std::string msg)
 {
+    print_address_port_from_socketfd(socket_fd, msg);
     size_t total_bytes_to_write = msg.length();
     size_t bytes_written_so_far = 0;
     size_t bytes_left_to_write = total_bytes_to_write;
@@ -1051,12 +1053,13 @@ void update_server_status_map_and_group_primary_map(std::string server_key)
         }
         // get active secondary node list
         std::vector<std::string> list_of_active_secondaries = get_list_of_active_secondaries(group_no);
-        for (std::string secondaryID : list_of_active_secondaries) {
-            if (!send_PRIM_to_secondary(secondaryID, group_primary_map.at(group_no))){
+        for (std::string secondaryID : list_of_active_secondaries)
+        {
+            if (!send_PRIM_to_secondary(secondaryID, group_primary_map.at(group_no)))
+            {
                 std::cerr << "Error sending PRIM to secondary at: " << secondaryID << std::endl;
             }
         }
-        
     }
     else
     {
@@ -1125,7 +1128,7 @@ bool create_socket_send_helper(std::string serverID, std::string message, std::s
     char *buffer;
     read_until_crlf(sockfd, &buffer);
     std::string actual_server_response{buffer};
-    std::cerr << "(cssh) actual_server_response: " << actual_server_response << std::endl;
+    std::cerr << "(cssh) actual_server_response from " << storage_node_address << ":" << storage_node_port << ": " << actual_server_response << std::endl;
     close(sockfd);
     if (expected_server_response == actual_server_response)
     {
@@ -1475,14 +1478,34 @@ std::vector<std::string> get_list_of_active_secondaries(int group_no)
 }
 
 /// @brief Send PRIM:0,current_primary_ID to a secondary node
-/// @param secondary_server_ID 
-/// @param current_primary_ID 
+/// @param secondary_server_ID
+/// @param current_primary_ID
 /// @return true if successful, false if secondary did not send back expected response
-bool send_PRIM_to_secondary(std::string secondary_server_ID, std::string current_primary_ID) {
+bool send_PRIM_to_secondary(std::string secondary_server_ID, std::string current_primary_ID)
+{
     std::string expected_server_response = "+OK Primary updated\r\n";
-    std::string message_to_send = "PRIM:0," + current_primary_ID;
-    if (!create_socket_send_helper(secondary_server_ID, message_to_send, expected_server_response)) {
+    std::string message_to_send = "PRIM:0," + current_primary_ID + "\r\n";
+    std::cout << "(send_PRIM_to_secondary) send to: " << secondary_server_ID << ", message: " << message_to_send << std::endl;
+    if (!create_socket_send_helper(secondary_server_ID, message_to_send, expected_server_response))
+    {
         return false;
     }
     return true;
+}
+
+void print_address_port_from_socketfd(int socket_fd, std::string msg)
+{
+    // Print the IP address and port associated with socket_fd
+    struct sockaddr_in peer_addr;
+    socklen_t addr_len = sizeof(peer_addr);
+    if (getpeername(socket_fd, (struct sockaddr *)&peer_addr, &addr_len) == -1)
+    {
+        perror("getpeername() failed");
+        return;
+    }
+    char ip_str[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &(peer_addr.sin_addr), ip_str, INET_ADDRSTRLEN);
+    int port = ntohs(peer_addr.sin_port);
+
+    std::cerr << "writing msg: " << msg << " to " << ip_str << ":" << port << std::endl;
 }
