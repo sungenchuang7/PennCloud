@@ -525,7 +525,7 @@ void* workerThread(void* connectionInfo) {
                     }
 
                     // Get and send write request to primary.
-                    writeToPrimary(requestPrimary(), "PUT", requestedRow, requestedColumn, valueData);
+                    writeToPrimary(primaryAddress, "PUT", requestedRow, requestedColumn, valueData);
 
                     valueData = new std::string("");
                     requestedCommand = "Default";
@@ -887,7 +887,7 @@ void* workerThread(void* connectionInfo) {
                                         fprintf(stderr, "Error: Invalid tablet requested for DELE.\n");
                                     }
 
-                                    bool err = writeToPrimary(requestPrimary(), "DELE", requestedRow, requestedColumn, nullptr);
+                                    bool err = writeToPrimary(primaryAddress, "DELE", requestedRow, requestedColumn, nullptr);
 
                                     if (err == false) {
                                         // Value deleted.
@@ -1200,28 +1200,48 @@ void* workerThread(void* connectionInfo) {
 
                                 // Backend server down. Update primary status and list of active storage servers.
                                 pthread_mutex_lock(&primaryUpdateLock);
-                                currentPrimary = true;
-                                activeNodes.clear();
+                                if (buf[5] == '1') {
+                                    currentPrimary = true;
+                                    activeNodes.clear();
 
-                                // Parse the arguments.
-                                std::string primArgument = "";
-                                std::string nextValue = "";
-                                int indexTracker = 0;
-                                primArgument.append(buf.begin() + 5, buf.begin() + i);
-                                std::stringstream ss(primArgument);
+                                    // Parse the arguments.
+                                    std::string primArgument = "";
+                                    std::string nextValue = "";
+                                    int indexTracker = 0;
+                                    primArgument.append(buf.begin() + 7, buf.begin() + i);
+                                    // std::cout << "PRIM ARGUMENT AFTER 1 FOR PRIMARY HERE:" << primArgument << std::endl;
+                                    std::stringstream ss(primArgument);
 
-                                while (!ss.eof()) {
-                                    std::getline(ss, nextValue, ',');
-                                    activeNodes.push_back(nextValue);
+                                    while (!ss.eof()) {
+                                        std::getline(ss, nextValue, ',');
+                                        activeNodes.push_back(nextValue);
+                                    }
+
+                                    pthread_mutex_unlock(&primaryUpdateLock);
+
+                                    if (write(comm_FD, &primMessage[0], primMessage.length()) < 0) {
+                                        fprintf(stderr, "PRIM failed to write: %s\n", strerror(errno));
+                                    }
+
+                                    fprintf(stderr, "[Current Primary: %s] Storage server statuses updated - currently active nodes: %s\n", 
+                                            ipPorts[myIndex].data(), primArgument.data());
+                                } else {
+                                    currentPrimary = false;
+
+                                    // Parse the arguments.
+                                    std::string primArgument = "";
+                                    primArgument.append(buf.begin() + 7, buf.begin() + i);
+                                    // std::cout << "PRIM ARGUMENT FOR SECONDARY HERE:" << primArgument << std::endl;
+                                    primaryAddress = primArgument;
+
+                                    pthread_mutex_unlock(&primaryUpdateLock);
+
+                                    if (write(comm_FD, &primMessage[0], primMessage.length()) < 0) {
+                                        fprintf(stderr, "PRIM failed to write: %s\n", strerror(errno));
+                                    }
+
+                                    fprintf(stderr, "[Replica: %s] Primary down - new primary: %s\n", ipPorts[myIndex].data(), primaryAddress.data());
                                 }
-
-                                pthread_mutex_unlock(&primaryUpdateLock);
-
-                                if (write(comm_FD, &primMessage[0], primMessage.length()) < 0) {
-                                    fprintf(stderr, "REMV failed to write: %s\n", strerror(errno));
-                                }
-
-                                fprintf(stderr, "[Current Primary: %s] Storage server statuses updated - currently active nodes: %s\n", ipPorts[myIndex].data(), primArgument.data());
                             } else if ((buf[0] == 's' || buf[0] == 'S') && 
                                     (buf[1] == 't' || buf[1] == 'T') && 
                                     (buf[2] == 'd' || buf[2] == 'D') &&
@@ -1896,7 +1916,6 @@ std::string requestPrimary() {
 }
 
 bool writeToPrimary(std::string primary, std::string action, std::string row, std::string column, std::string* data) {
-    // std::string primary = ipPorts[primaryIndex];
     int openFD;
     int numRead;
     int status;
@@ -1931,6 +1950,9 @@ bool writeToPrimary(std::string primary, std::string action, std::string row, st
             rawPort += primary[i];
         }
     }
+
+    std::cout << "Primary Address in writeToPrimary:" << ipAddr << std::endl;
+    std::cout << "Primary Port in writeToPrimary:" << rawPort << std::endl;
 
     primaryPort = std::stoi(rawPort);
     address.sin_family = AF_INET;
@@ -2839,7 +2861,6 @@ void sendLogFileData(std::string node, std::vector<char>& data, char tablet) {
 }
 
 void sendCheckpointFile(std::string node, std::vector<char>& data, char tablet) {
-    // std::string primary = ipPorts[primaryIndex];
     int openFD;
     int numRead;
     int status;
