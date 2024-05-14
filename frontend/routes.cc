@@ -1957,18 +1957,6 @@ std::tuple<std::string, std::string, std::string> post_delete_message(ReqInitLin
   return std::make_tuple(init_response, headers, message_body);
 }
 
-// Reply to a message (uses post send)
-std::tuple<std::string, std::string, std::string> post_reply_message(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body)
-{
-  return std::make_tuple("", "", "");
-}
-
-// Forward a message (uses post send)
-std::tuple<std::string, std::string, std::string> post_forward_message(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body)
-{
-  return std::make_tuple("", "", "");
-}
-
 std::tuple<std::string, std::string, std::string> post_change_password(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body)
 {
   // Parse body for username and password
