@@ -28,9 +28,23 @@ These frontend servers will each connect to the load balancer, and occasionally 
 In order to connect to the frontend, a user should connect to localhost:8000. The load balancer will then automatically redirect the user to the relevant frontend server. It's imperative that all frontend servers are connected to the load balancer before any users attempt to connect. 
 
 # To launch backend servers: 
-First, run all the storage node servers on port as per `./backend/config.txt` (storage node #1 should use the address and port specified in line 2, storage node #2 line 3 and so on). To run `backendserver`, type `./backendserver -i 1 -c config.txt` for example, where -i is the index for the storage node and -c is the configuration file. 
+First, the working directory needs to be `root/backend/` (type `cd ./../backend/` if coming from the previous step). Compile all the source code by typing `make`. 
 
-Then now start running `masterbackendserver` by typing `./masterbackendserver -d -v -p 20000 config.txt`. `masterbackendserver` will send periodic heart-beat messages to detect if any of the storage nodes is down. The communication between the frontend and backend must be initiated via a "INIT,rowkey" command sent to the backend master. The backend will then send back the address and port information of the storage node storing the data for the specified `rowkey` including the username/password login info.  
+Now, open 9 Terminal tabs. 
+In the 1st tab, run `./backendserver -c config.txt -i 1`.
+In the 2nd tab, run `./backendserver -c config.txt -i 2`.
+In the 3rd tab, run `./backendserver -c config.txt -i 3`.
+In the 4th tab, run `./backendserver -c config.txt -i 4`.
+In the 5th tab, run `./backendserver -c config.txt -i 5`.
+In the 6th tab, run `./backendserver -c config.txt -i 6`.
+In the 7th tab, run `./backendserver -c config.txt -i 7`.
+In the 8th tab, run `./backendserver -c config.txt -i 8`.
+In the 9th tab, run `./backendserver -c config.txt -i 9`.
+
+Here, `-i`'s argument refers to the storage node numberm and `-c`'s the config file's path. 
+
+Now open another tab. 
+In the tab, run `./masterbackendserver -d -v config.txt`. 
 
 To clear the memory on disk for storage node #1, navigate to backend/storage_node_1/activity_logs and remove each "tablet_log_" .txt file. Next, navigate to backend/storage_node_1/tablets and remove each "tablet_" .txt file. This information is also stored in a README file in each directory.
 
