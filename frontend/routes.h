@@ -9,7 +9,6 @@ struct ReqInitLine
   std::string method;
   std::string path;
   std::string version;
-  ReqInitLine(std::string method, std::string uri, std::string version) : method(method), path(path), version(version) {}
 };
 
 void computeDigest(char *data, int dataLengthBytes, unsigned char *digestBuffer);
@@ -37,15 +36,20 @@ std::tuple<std::string, std::string, std::string> post_reply_message(ReqInitLine
 std::tuple<std::string, std::string, std::string> post_forward_message(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body);
 std::tuple<std::string, std::string, std::string> post_signup(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body);
 std::tuple<std::string, std::string, std::string> post_change_password(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body);
+std::tuple<std::string, std::string, std::string> post_kill_server(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body);
+std::tuple<std::string, std::string, std::string> post_restart_server(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body);
+std::tuple<std::string, std::string, std::string> get_kvs_data(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body);
 
-
-// inbox stuff 
+// inbox stuff
 // GET ROUTES
 std::tuple<std::string, std::string, std::string> get_storage(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers);
 std::tuple<std::string, std::string, std::string> get_file(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers);
 std::tuple<std::string, std::string, std::string> download_file(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers);
 
-
-// POST ROUTES 
+// POST ROUTES
 std::tuple<std::string, std::string, std::string> post_file(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body);
+std::tuple<std::string, std::string, std::string> post_folder(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body);
+std::tuple<std::string, std::string, std::string> delete_file(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body);
+std::tuple<std::string, std::string, std::string> rename_file(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body);
+std::tuple<std::string, std::string, std::string> move_file(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body);
 #endif

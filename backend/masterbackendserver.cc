@@ -74,7 +74,8 @@ std::map<std::string, bool> server_status_map;
 std::map<int, std::vector<std::string>> tablet_storage_map;
 std::map<int, std::string> group_primary_map;  // this keeps track of the current primary node of each replication group <group_no, primary_serverID>
 std::map<std::string, int> serverID_group_map; // given a serverID, this map tells you which replication group this server is in
-std::unordered_set<std::string> down_servers;
+std::unordered_set<std::string> pseudo_killed_nodes;
+// std::unordered_set<std::string> down_servers;
 // std::map<int, std::map<int, std::vector<std::string>>> tablet_storage_map;
 std::vector<std::string> config_serverIDs; // server IDs (address + port) read from config file
 int num_servers;                           // number of storage nodes
@@ -96,8 +97,24 @@ void init_tablet_storage_map();
 void init_group_primary_map();
 void init_server_status_map();
 void start_heartbeat_monitoring();
-int redirect(char first_char);
+int get_group_no_from_char(char first_char);
 void update_server_status_map_and_group_primary_map(std::string server_key);
+std::vector<std::string> get_alive_servers(int group_no);
+std::string get_alive_servers_string(int group_no);
+bool send_PRIM(int group_no);
+std::vector<std::string> get_list_of_active_secondaries(int group_no);
+bool send_PRIM_to_secondary(std::string secondary_server_ID, std::string current_primary_ID);
+void print_address_port_from_socketfd(int socket_fd, std::string msg);
+
+//////////////////////////////// RECEIVED COMMAND HANDLERS ////////////////////////////////
+void INIT_handler(std::string command, int socket_fd);
+void STAT_handler(int socket_fd);
+void GTPM_handler(std::string command, int socket_fd);
+void GTGP_handler(std::string command, int socket_fd);
+void RCVY_handler(std::string command, int socket_fd);
+void KILL_handler(std::string command, int socket_fd);
+void RVIV_handler(std::string command, int socket_fd);
+void QUIT_handler(int socket_fd, bool &quit_received);
 
 int main(int argc, char *argv[])
 {
@@ -147,25 +164,13 @@ int main(int argc, char *argv[])
 
     // Setup socket and bind to port
     num_servers = config_serverIDs.size();
-    std::cout << "num_servers: " << num_servers << std::endl;
+    std::cerr << "num_servers: " << num_servers << std::endl;
 
     init_tablet_storage_map();
     init_group_primary_map();
     init_server_status_map();
 
     start_heartbeat_monitoring();
-
-    // heartbeat_arg_ptrs.resize(num_servers);
-    // heartbeat_threads.resize(num_servers);
-    // for (int i = 0; i < num_servers; i++) // create a thread for each storage node for monitoring
-    // {
-    //     std::vector<std::string> temp = split_string(config_serverIDs.at(i), ":"); // split "127.0.0.1:5000" for example
-    //     std::string server_address = temp[0];
-    //     int server_port = std::stoi(temp[1]);
-    //     heartbeat_arg *arg_ptr = new heartbeat_arg(server_address, server_port);
-    //     heartbeat_arg_ptrs.push_back(arg_ptr);
-    //     pthread_create(&heartbeat_threads.at(i), NULL, heartbeat_thread_func, arg_ptr);
-    // }
 
     // Initialize socket for listening for connections with from frontend
     listen_fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -210,7 +215,7 @@ int main(int argc, char *argv[])
 
         if (debug_mode)
         {
-            std::cout << "starting to loop for new connections from frontend..." << std::endl;
+            std::cerr << "starting to loop for new connections from frontend..." << std::endl;
         }
 
         struct sockaddr_in client_addr;
@@ -221,7 +226,7 @@ int main(int argc, char *argv[])
 
         if (debug_mode)
         {
-            std::cout << "*comm_fd: " << *comm_fd << std::endl;
+            std::cerr << "*comm_fd: " << *comm_fd << std::endl;
         }
 
         add_connection(comm_fd);
@@ -236,7 +241,7 @@ int main(int argc, char *argv[])
 
         if (debug_mode)
         {
-            std::cout << "thread created" << std::endl;
+            std::cerr << "thread created" << std::endl;
         }
         if (debug_mode && create_result)
         {
@@ -244,7 +249,7 @@ int main(int argc, char *argv[])
             break;
         }
         add_tid(thread);
-        std::cout << "tids_vector.size(): " << tids_vector.size() << std::endl;
+        std::cerr << "tids_vector.size(): " << tids_vector.size() << std::endl;
     }
 
     return 0;
@@ -263,7 +268,7 @@ void *frontend_thread_func(void *arg)
 
     // int socket_fd = ((thread_args *)arg)->socket_fd;
     int socket_fd = *((int *)arg);
-    std::cout << "inside frontend_thread_func, socket_fd: " << socket_fd << std::endl;
+    std::cerr << "inside frontend_thread_func, socket_fd: " << socket_fd << std::endl;
 
     std::string buffer, command;
     ssize_t bytes_read;
@@ -275,21 +280,22 @@ void *frontend_thread_func(void *arg)
         std::cerr << "[" << socket_fd << "] New connection" << std::endl;
     }
     std::string welcome_message = "+OK Server ready (Author: Team 13)\r\n";
-    // bool result = write_helper(socket_fd, welcome_message);
-    // if (!result)
-    // {
-    //     std::cout << "result = false" << std::endl;
-    //     close(socket_fd);
-    //     remove_connection(socket_fd);
-    //     return NULL;
-    // }
-    write_helper(socket_fd, welcome_message);
+
+    if (!write_helper(socket_fd, welcome_message))
+    {
+        std::cerr << "Failed to send welcome message to client" << std::endl;
+        close(socket_fd);
+        remove_connection(socket_fd);
+        return NULL;
+    }
     verbose_print_helper_server(socket_fd, welcome_message);
 
+    bool quit_received = false;
+
     //////// Start reading from the client
-    while (true)
+    while (!quit_received)
     {
-        std::cout << "entering while loop here" << std::endl;
+        std::cerr << "entering while loop here" << std::endl;
         if (shut_down_flag)
         {
             close(socket_fd);
@@ -297,10 +303,10 @@ void *frontend_thread_func(void *arg)
             return NULL;
         }
         bytes_read = read(socket_fd, read_buffer, sizeof(read_buffer) - 1); // QUESTION: why doesn't read return 0 when SIGINT handler close the socket
-        std::cout << "read in worker just unblocked" << std::endl;
+        std::cerr << "read in worker just unblocked" << std::endl;
         if (sigusr1_flag == 1)
         {
-            std::cout << "sigusr1_flag == 1, should terminate thread" << std::endl;
+            std::cerr << "sigusr1_flag == 1, should terminate thread" << std::endl;
             close(socket_fd);
             remove_connection(socket_fd);
             return NULL;
@@ -311,7 +317,7 @@ void *frontend_thread_func(void *arg)
             {
                 if (verbose_mode)
                 {
-                    std::cout << "Socket has been closed." << std::endl;
+                    std::cerr << "Socket has been closed." << std::endl;
                 }
             }
             else
@@ -327,7 +333,7 @@ void *frontend_thread_func(void *arg)
         {
             if (verbose_mode)
             {
-                std::cout << "Client closed connection" << std::endl;
+                std::cerr << "Client closed connection" << std::endl;
             }
             break;
         }
@@ -337,7 +343,7 @@ void *frontend_thread_func(void *arg)
         verbose_print_helper_client(socket_fd, buffer);
         if (debug_mode)
         {
-            std::cout << "buffer so far:" << buffer << std::endl;
+            std::cerr << "buffer so far:" << buffer << std::endl;
         }
 
         if (shut_down_flag)
@@ -356,7 +362,7 @@ void *frontend_thread_func(void *arg)
 
             if (debug_mode)
             {
-                std::cout << "buffer after erase() now: " << buffer << std::endl;
+                std::cerr << "buffer after erase() now: " << buffer << std::endl;
             }
             // Convert the first 4 characters to lowercase to handle case-insensitive commands
             for (size_t i = 0; i < command.length() && i < 4; ++i)
@@ -368,230 +374,40 @@ void *frontend_thread_func(void *arg)
 
             if (command.substr(0, 4) == "INIT")
             {
-                if (debug_mode)
-                {
-                    std::cout << "MASTER received command: " << command << std::endl;
-                }
-
-                std::vector<std::string> command_tokens = split_string(command, ","); // INIT,linhphan -> {INIT, linhphan}
-                if (command_tokens.size() != 2)
-                {
-                    response = "-ERR Incorrect command syntax\r\n";
-                    write_helper(socket_fd, response);
-                    continue;
-                }
-
-                if (debug_mode)
-                {
-                    std::cout << "command_tokens.size(): " << command_tokens.size() << std::endl;
-                }
-
-                std::string row_key = command_tokens[1];
-
-                if (debug_mode)
-                {
-                    std::cout << "row_key: " << row_key << std::endl;
-                }
-
-                char first_char = row_key.at(0);
-
-                // int tablet_no = redirect(first_char);
-                int group_no = redirect(first_char);
-
-                // if (debug_mode)
-                // {
-                //     std::cout << "tablet_no: " << tablet_no << std::endl;
-                // }
-
-                // if (tablet_no == -1)
-                // {
-                //     response = "-ERR invalid row key\r\n";
-                // }
-                if (group_no == -1)
-                {
-                    response = "-ERR invalid row key\r\n";
-                }
-                else
-                {
-                    // pthread_mutex_lock(&server_status_map_mutex);
-                    // create a reference to a vector holding servers' indices storing the given tablet
-                    if (debug_mode)
-                    {
-                        std::cout << "count: " << tablet_storage_map.count(2) << std::endl;
-                    }
-                    // auto &tablet_servers_list = tablet_storage_map.at(tablet_no);
-                    auto &tablet_servers_list = tablet_storage_map.at(group_no);
-                    // if (debug_mode)
-                    // {
-                    //     std::cout << "broke here?" << std::endl;
-                    // }
-                    std::string server_ID = tablet_servers_list.front();
-                    while (down_servers.count(server_ID) > 0) // if this server is dead
-                    {
-                        tablet_servers_list.erase(tablet_storage_map.at(group_no).begin());
-                        tablet_servers_list.push_back(server_ID);
-                        server_ID = tablet_servers_list.front();
-                    }
-                    // while (!server_status_map.at(server_ID)) // if this server is dead
-                    // {
-                    //     tablet_servers_list.erase(tablet_storage_map.at(group_no).begin());
-                    //     tablet_servers_list.push_back(server_ID);
-                    //     server_ID = tablet_servers_list.front();
-                    // }
-                    response = "RDIR," + server_ID + "\r\n";
-                    // update front of vector
-                    tablet_servers_list.erase(tablet_storage_map.at(group_no).begin());
-                    tablet_servers_list.push_back(server_ID);
-                }
-                write_helper(socket_fd, response);
-                verbose_print_helper_server(socket_fd, response);
+                INIT_handler(command, socket_fd);
             }
             else if (command == "STAT")
             {
-                response += "+OK,";
-                pthread_mutex_lock(&server_status_map_mutex);
-                for (const auto &pair : server_status_map)
-                {
-                    auto temp = split_string(pair.first, ":");
-                    std::string serv_addr_str = temp[0];
-                    std::string serv_port_str = temp[1];
-                    std::string serv_status_str = std::to_string(pair.second);
-                    response += serv_addr_str + ":" + serv_port_str + ":" + serv_status_str + ",";
-                }
-                response += "\r\n";
-                write_helper(socket_fd, response);
-                verbose_print_helper_server(socket_fd, response);
-                pthread_mutex_unlock(&server_status_map_mutex);
+                STAT_handler(socket_fd);
             }
             else if (command.substr(0, 4) == "GTPM")
             {
-                std::cout << "here1" << std::endl;
-                std::vector<std::string> command_tokens = split_string(command, ","); // INIT,linhphan -> {INIT, linhphan}
-                if (command_tokens.size() != 2)
-                {
-                    response = "-ERR Incorrect command syntax\r\n";
-                    write_helper(socket_fd, response);
-                    verbose_print_helper_server(socket_fd, response);
-                    continue;
-                }
-                std::string serverID_to_lookup = command_tokens.at(1);
-                if (serverID_group_map.count(serverID_to_lookup) == 0)
-                {
-                    response = "-ERR Invalid server address\r\n";
-                    write_helper(socket_fd, response);
-                    verbose_print_helper_server(socket_fd, response);
-                    continue;
-                }
-                std::cout << "here2" << std::endl;
-                int server_group_no = serverID_group_map.at(serverID_to_lookup);
-                std::string primaryID = group_primary_map.at(server_group_no);
-                response += "+OK " + primaryID + "\r\n";
-                write_helper(socket_fd, response);
-                verbose_print_helper_server(socket_fd, response);
+                GTPM_handler(command, socket_fd);
             }
             else if (command.substr(0, 4) == "GTGP")
             {
-                std::vector<std::string> command_tokens = split_string(command, ","); // INIT,linhphan -> {INIT, linhphan}
-                if (command_tokens.size() != 2)
-                {
-                    response = "-ERR Incorrect command syntax\r\n";
-                    write_helper(socket_fd, response);
-                    verbose_print_helper_server(socket_fd, response);
-                    continue;
-                }
-                std::string serverID_to_lookup = command_tokens.at(1);
-                if (serverID_group_map.count(serverID_to_lookup) == 0)
-                {
-                    response = "-ERR Invalid server address\r\n";
-                    write_helper(socket_fd, response);
-                    verbose_print_helper_server(socket_fd, response);
-                    continue;
-                }
-
-                response += "+OK ";
-                int server_group_no = serverID_group_map.at(serverID_to_lookup);
-                std::vector<std::string> server_list = tablet_storage_map.at(server_group_no);
-                for (const std::string &serverID : server_list)
-                {
-                    if (server_status_map.at(serverID))
-                    { // if it's alive
-                        response += serverID + ",";
-                    }
-                }
-                response = response.substr(0, response.size() - 1) + "\r\n"; // remove last char (extra ,)
-                write_helper(socket_fd, response);
-                verbose_print_helper_server(socket_fd, response);
+                GTGP_handler(command, socket_fd);
             }
             else if (command.substr(0, 4) == "RCVY")
             {
-                std::vector<std::string> command_tokens = split_string(command, ","); // INIT,linhphan -> {INIT, linhphan}
-                if (command_tokens.size() != 2)
-                {
-                    response = "-ERR Incorrect command syntax\r\n";
-                    write_helper(socket_fd, response);
-                    verbose_print_helper_server(socket_fd, response);
-                    continue;
-                }
-                std::string serverID_to_lookup = command_tokens.at(1);
-                if (serverID_group_map.count(serverID_to_lookup) == 0)
-                {
-                    response = "-ERR Invalid server address\r\n";
-                    write_helper(socket_fd, response);
-                    verbose_print_helper_server(socket_fd, response);
-                    continue;
-                }
-                // down_servers.erase(command_tokens.at(1));
-                pthread_mutex_lock(&server_status_map_mutex);
-                server_status_map.at(command_tokens.at(1)) = true;
-                pthread_mutex_unlock(&server_status_map_mutex);
-                response = "+OK node marked as alive\r\n";
-                write_helper(socket_fd, response);
-                verbose_print_helper_server(socket_fd, response);
+                RCVY_handler(command, socket_fd);
             }
             else if (command.substr(0, 4) == "KILL")
             {
-                std::vector<std::string> command_tokens = split_string(command, ","); // INIT,linhphan -> {INIT, linhphan}
-                if (command_tokens.size() != 2)
-                {
-                    response = "-ERR Incorrect command syntax\r\n";
-                    write_helper(socket_fd, response);
-                    verbose_print_helper_server(socket_fd, response);
-                    continue;
-                }
-                std::string serverID_to_lookup = command_tokens.at(1);
-                if (serverID_group_map.count(serverID_to_lookup) == 0)
-                {
-                    response = "-ERR Invalid server address\r\n";
-                    write_helper(socket_fd, response);
-                    verbose_print_helper_server(socket_fd, response);
-                    continue;
-                }
-                std::string message_to_send = "STDN\r\n";
-                std::string expected_response = "+OK shutting down\r\n";
-                if (create_socket_send_helper(serverID_to_lookup, message_to_send, expected_response))
-                {
-                    response = "+OK storage server shutdown requested\r\n";
-                    write_helper(socket_fd, response);
-                    verbose_print_helper_server(socket_fd, response);
-                }
-                else
-                {
-                    response = "-ERR unable to request storage server shutdown\r\n";
-                    write_helper(socket_fd, response);
-                    verbose_print_helper_server(socket_fd, response);
-                }
+                KILL_handler(command, socket_fd);
+            }
+            else if (command.substr(0, 4) == "RVIV")
+            {
+                RVIV_handler(command, socket_fd);
             }
             else if (command.substr(0, 4) == "QUIT")
             {
-                response = "+OK Goodbye!\r\n";
-                write_helper(socket_fd, response);
-                verbose_print_helper_server(socket_fd, response);
+                QUIT_handler(socket_fd, quit_received);
                 break;
             }
             else
             {
-                std::cout << "here3" << std::endl;
-                response = "-ERR unrecognizable command\r\n";
+                std::string response = "-ERR unrecognizable command\r\n";
                 write_helper(socket_fd, response);
                 verbose_print_helper_server(socket_fd, response);
             }
@@ -600,13 +416,13 @@ void *frontend_thread_func(void *arg)
 
     close(socket_fd);
     remove_connection(socket_fd);
-    // std::cout << "Thread dying detached!" << std::endl;
+    // std::cerr << "Thread dying detached!" << std::endl;
     return NULL;
 }
 
 void add_connection(int *socket_fd)
 {
-    std::cout << "add_connection() starts" << std::endl;
+    std::cerr << "add_connection() starts" << std::endl;
     pthread_mutex_lock(&connections_mutex);
     comm_fds_vector.push_back(socket_fd);
     pthread_mutex_unlock(&connections_mutex);
@@ -621,9 +437,10 @@ void remove_connection(int socket_fd)
         if (*(comm_fds_vector.at(i)) == socket_fd)
         {
             free(comm_fds_vector.at(i));
+            comm_fds_vector.at(i) = nullptr; // see if it works
             index = i;
 
-            std::cout << "server is calling free() to release resources..." << std::endl;
+            std::cerr << "server is calling free() to release resources..." << std::endl;
             comm_fds_vector.erase(comm_fds_vector.begin() + i);
             break;
         }
@@ -633,13 +450,13 @@ void remove_connection(int socket_fd)
 
 void shutdown_server(int signum)
 {
-    std::cout << "SIGINT received!!" << std::endl;
+    std::cerr << "SIGINT received!!" << std::endl;
     shut_down_flag = 1; // sets global shutdown flag to true
 
     if (debug_mode)
     {
-        std::cout << "comm_fds_vector.size(): " << comm_fds_vector.size() << std::endl;
-        std::cout << "tids_vector.size(): " << tids_vector.size() << std::endl;
+        std::cerr << "comm_fds_vector.size(): " << comm_fds_vector.size() << std::endl;
+        std::cerr << "tids_vector.size(): " << tids_vector.size() << std::endl;
     }
 
     pthread_mutex_lock(&connections_mutex);
@@ -653,9 +470,9 @@ void shutdown_server(int signum)
         {
             std::cerr << "About to pthread_kill tids_vector.at(" << i << "): " << tids_vector.at(i) << std::endl;
         }
-        std::cout << "SIGUSR1 will be sent soon..." << std::endl;
+        std::cerr << "SIGUSR1 will be sent soon..." << std::endl;
         int kill_result = pthread_kill(tids_vector.at(i), SIGUSR1);
-        std::cout << "SIGUSR1 is sent..." << std::endl;
+        std::cerr << "SIGUSR1 is sent..." << std::endl;
         if (debug_mode && kill_result)
         {
             std::cerr << "pthread_kill failed..." << std::endl;
@@ -664,8 +481,8 @@ void shutdown_server(int signum)
 
     if (debug_mode)
     {
-        std::cout << "heartbeat_threads.size(): " << heartbeat_threads.size() << std::endl;
-        std::cout << "heartbeat_tid_socket_map.size(): " << heartbeat_tid_socket_map.size() << std::endl;
+        std::cerr << "heartbeat_threads.size(): " << heartbeat_threads.size() << std::endl;
+        std::cerr << "heartbeat_tid_socket_map.size(): " << heartbeat_tid_socket_map.size() << std::endl;
     }
 
     for (const auto &pair : heartbeat_tid_socket_map)
@@ -677,13 +494,13 @@ void shutdown_server(int signum)
         if (debug_mode)
         {
             std::cerr << "About to pthread_kill tid: " << pair.first << std::endl;
-            std::cout << "SIGUSR1 will be sent soon..." << std::endl;
+            std::cerr << "SIGUSR1 will be sent soon..." << std::endl;
         }
 
         int kill_result = pthread_kill(pair.first, SIGUSR1);
         if (debug_mode)
         {
-            std::cout << "SIGUSR1 is sent..." << std::endl;
+            std::cerr << "SIGUSR1 is sent..." << std::endl;
             if (kill_result)
             {
                 std::cerr << "pthread_kill failed..." << std::endl;
@@ -694,7 +511,7 @@ void shutdown_server(int signum)
 
     if (debug_mode)
     {
-        std::cout << "About to call pthread_join in SIGINT handler" << std::endl;
+        std::cerr << "About to call pthread_join in SIGINT handler" << std::endl;
     }
     // make sure tids_vector is not modified to be empty at this point
     for (auto tid : tids_vector) // fix this first, make sure pthread_join is called
@@ -707,7 +524,7 @@ void shutdown_server(int signum)
     }
     if (debug_mode)
     {
-        std::cout << "all frontend threads joined inside SIGINT handler" << std::endl;
+        std::cerr << "all frontend threads joined inside SIGINT handler" << std::endl;
     }
 
     for (const auto &pair : heartbeat_tid_socket_map) // fix this first, make sure pthread_join is called
@@ -720,7 +537,7 @@ void shutdown_server(int signum)
     }
     if (debug_mode)
     {
-        std::cout << "all backend heartbeat threads joined inside SIGINT handler" << std::endl;
+        std::cerr << "all backend heartbeat threads joined inside SIGINT handler" << std::endl;
     }
 
     close(listen_fd);
@@ -750,12 +567,15 @@ void verbose_print_helper_client(const int &socket_fd, const std::string &msg)
 
 bool write_helper(int socket_fd, std::string msg)
 {
+    print_address_port_from_socketfd(socket_fd, msg);
     size_t total_bytes_to_write = msg.length();
     size_t bytes_written_so_far = 0;
     size_t bytes_left_to_write = total_bytes_to_write;
     while (bytes_written_so_far != total_bytes_to_write)
     {
+        std::cerr << "(write_helper) trying to write: " << msg << std::endl;
         ssize_t write_result = write(socket_fd, msg.c_str() + bytes_written_so_far, bytes_left_to_write);
+        std::cerr << "(write_helper) written!" << std::endl;
         if (shut_down_flag)
         {
             return false;
@@ -794,7 +614,7 @@ bool write_helper(int socket_fd, std::string msg)
 void SIGUSR1_handler(int signum)
 {
     sigusr1_flag = 1;
-    std::cout << "SIGUSR1 received!" << std::endl;
+    std::cerr << "SIGUSR1 received!" << std::endl;
 }
 
 void add_tid(pthread_t tid)
@@ -881,7 +701,7 @@ void parse_args(int argc, char *argv[])
             break;
         case 'd':
             debug_mode = true;
-            std::cout << "setting debug_mode to true" << std::endl;
+            std::cerr << "setting debug_mode to true" << std::endl;
             break;
         default:
             std::cerr << "Usage: " << argv[0] << " -p <portno> (-a) (-v)\n";
@@ -891,11 +711,14 @@ void parse_args(int argc, char *argv[])
     config_file_path = argv[optind++];
     if (debug_mode)
     {
-        std::cout << "config file used is: " << config_file_path << std::endl;
+        std::cerr << "config file used is: " << config_file_path << std::endl;
     }
 }
 
-int redirect(char first_char)
+/// @brief This function parses the first char of a row-key to determine which replication group the row belongs to
+/// @param first_char
+/// @return replication group number, or -1 if the input char isn't valid
+int get_group_no_from_char(char first_char)
 {
     if ((first_char >= 'A' && first_char <= 'I') || (first_char >= 'a' && first_char <= 'i'))
     {
@@ -922,7 +745,7 @@ void *heartbeat_thread_func(void *arg)
     sigaddset(&set, SIGINT);
     if (pthread_sigmask(SIG_BLOCK, &set, NULL) != 0)
     {
-        std::cerr << "pthread_sigmask() failed..." << std::endl;
+        std::cerr << "(heartbeat) pthread_sigmask() failed..." << std::endl;
         return NULL;
     }
 
@@ -946,15 +769,17 @@ void *heartbeat_thread_func(void *arg)
 
         if (inet_pton(AF_INET, storage_node_address.c_str(), &serv_addr.sin_addr) <= 0)
         {
-            std::cerr << "Invalid address / Address not supported\n";
+            std::cerr << "(heartbeat) Invalid address / Address not supported\n";
             return nullptr;
         }
 
         if ((sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
         {
-            std::cerr << "Socket creation error\n";
+            std::cerr << "(heartbeat) Socket creation error\n";
             return nullptr;
         }
+
+        // std::cerr << "SOCKFD:" << sockfd << std::endl;
 
         // update the valid sockfd associated with this thread's tid
         pthread_mutex_lock(&heartbeat_tid_socket_mutex);
@@ -966,9 +791,10 @@ void *heartbeat_thread_func(void *arg)
             update_server_status_map_and_group_primary_map(server_key);
             if (debug_mode)
             {
-                perror("Errno: ");
-                std::cerr << "Unable to connect to " << server_key << std::endl;
+                perror("(heartbeat) Errno: ");
+                std::cerr << "(heartbeat) Unable to connect to " << server_key << std::endl;
             }
+            close(sockfd);
             continue;
         }
 
@@ -981,15 +807,19 @@ void *heartbeat_thread_func(void *arg)
         tv.tv_usec = 0;
         setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof tv);
 
-        char buffer[DEFAULT_READ_BUFFER_SIZE] = {0};
-        int bytes_received = recv(sockfd, buffer, DEFAULT_READ_BUFFER_SIZE, 0);
+        // char buffer[DEFAULT_READ_BUFFER_SIZE] = {0};
+        // int bytes_received = recv(sockfd, buffer, DEFAULT_READ_BUFFER_SIZE, 0);
 
-        bool is_alive = (bytes_received > 0);
-
-        if (down_servers.count(server_key) > 0)
+        char *welcome_message_buffer;
+        ssize_t result = read_until_crlf(sockfd, &welcome_message_buffer); // read the welcome message from the target server
+        std::string actual_welcome_message{welcome_message_buffer};
+        std::string expected_welcome_message = "+OK Server ready\r\n";
+        if (actual_welcome_message != expected_welcome_message)
         {
-            continue;
+            std::cerr << "(heartbeat) Warning: actual_welcome_message != expected_welcome_message" << std::endl;
         }
+
+        bool is_alive = (result > 0);
 
         if (!is_alive) // if it's down
         {
@@ -1001,34 +831,48 @@ void *heartbeat_thread_func(void *arg)
             std::string response = "QUIT\r\n";
             write_helper(sockfd, response);
 
-            char *quit_response;
-            ssize_t result = read_until_crlf(sockfd, &quit_response);
+            char *quit_response_buffer;
+            ssize_t result = read_until_crlf(sockfd, &quit_response_buffer);
+            std::string actual_quit_response{quit_response_buffer};
+            std::string expected_quit_response = "+OK Goodbye!\r\n";
+
             if (debug_mode)
             {
                 if (result > 0)
                 {
-                    printf("quit_response: %s", quit_response);
+                    if (actual_quit_response != expected_quit_response)
+                    {
+                        std::cerr << "(heartbeat) Warning: actual_quit_response != expected_quit_response" << std::endl;
+                    }
+                    std::cerr << "(heartbeat) actual_quit_response: " << actual_quit_response << std::endl;
                 }
                 else if (result == 0)
                 {
-                    printf("Connection closed by peer\n");
+                    printf("(heartbeat) Connection closed by peer\n");
                 }
                 else
                 {
-                    printf("Error reading from socket\n");
+                    printf("(heartbeat) Error reading from socket\n");
                 }
             }
-            free(quit_response);
+            // free(quit_response);
         }
         if (debug_mode)
         {
             if (is_alive)
             {
-                std::cout << server_key << " is alive!" << std::endl;
+                if (pseudo_killed_nodes.count(server_key) > 0)
+                {
+                    std::cerr << "(heartbeat) " << server_key << " is pseudo-killed!" << std::endl;
+                }
+                else
+                {
+                    std::cerr << "(heartbeat) " << server_key << " is alive!" << std::endl;
+                }
             }
             else
             {
-                std::cout << server_key << " is dead!" << std::endl;
+                std::cerr << "(heartbeat) " << server_key << " is really dead!" << std::endl;
             }
         }
 
@@ -1163,8 +1007,8 @@ void init_server_status_map()
     }
 }
 
-/// @brief This function marks the specified server's status as "down" if it's still marked as "alive". If the server's status is already "down", then this function doesn't do anything. This function is thread-safe. 
-/// @param server_key serverID whose status might be updated 
+/// @brief This function marks the specified server's status as "down" if it's still marked as "alive". If the server's status is already "down", then this function doesn't do anything. This function is thread-safe.
+/// @param server_key serverID whose status might be updated
 void update_server_status_map_and_group_primary_map(std::string server_key)
 {
     pthread_mutex_lock(&server_status_map_mutex);
@@ -1174,16 +1018,17 @@ void update_server_status_map_and_group_primary_map(std::string server_key)
         pthread_mutex_unlock(&server_status_map_mutex);
         return; // don't have to mark it as down again
     }
-    std::cout << server_key << " is down!" << std::endl;
+    std::cerr << server_key << " is down!" << std::endl;
     server_status_map.at(server_key) = false;         // update the status of the server to be dead
     int group_no = serverID_group_map.at(server_key); // get the replication group number of the server
+    int iteration_counter = 0;
     if (group_primary_map.at(group_no) == server_key) // if the detected down node is the primary of the group
     {
-        std::cout << server_key << " is actually the primary!" << std::endl;
+        std::cerr << server_key << " is actually the primary!" << std::endl;
         // pick the front node in the group server list as potential new primary
         std::string candidate_primary = tablet_storage_map.at(group_no).front();
         // while this node is also down
-        while (!server_status_map.at(candidate_primary))
+        while (!server_status_map.at(candidate_primary)) // set a time out here using iteration counter
         {
             // pop the front node from the list
             tablet_storage_map.at(group_no).erase(tablet_storage_map.at(group_no).begin());
@@ -1191,10 +1036,40 @@ void update_server_status_map_and_group_primary_map(std::string server_key)
             tablet_storage_map.at(group_no).push_back(candidate_primary);
             // pick the new front node as potential new primary
             candidate_primary = tablet_storage_map.at(group_no).front();
+            iteration_counter++;
+            if (iteration_counter >= 3)
+            {
+                group_primary_map.at(group_no) = "all_dead";
+                pthread_mutex_unlock(&server_status_map_mutex);
+                std::cerr << "SET ALL DEAD" << std::endl;
+                return; // if no servers in the group are alive, don't send PRIM
+            }
         }
         group_primary_map.at(group_no) = candidate_primary;
-        std::cout << "new_primary: " << candidate_primary << std::endl;
+        std::cerr << "new_primary: " << candidate_primary << std::endl;
+        if (!send_PRIM(group_no))
+        {
+            std::cerr << "send_PRIM failed... " << std::endl;
+        }
+        // get active secondary node list
+        std::vector<std::string> list_of_active_secondaries = get_list_of_active_secondaries(group_no);
+        for (std::string secondaryID : list_of_active_secondaries)
+        {
+            if (!send_PRIM_to_secondary(secondaryID, group_primary_map.at(group_no)))
+            {
+                std::cerr << "Error sending PRIM to secondary at: " << secondaryID << std::endl;
+            }
+        }
     }
+    else
+    {
+        if (!send_PRIM(group_no))
+        {
+            std::cerr << "Error sending PRIM to primary of group no: " << group_no << std::endl;
+        }
+    }
+
+    // create_socket_send_helper(group_primary_map.at(group_no), )
     pthread_mutex_unlock(&server_status_map_mutex);
 }
 
@@ -1215,46 +1090,422 @@ bool create_socket_send_helper(std::string serverID, std::string message, std::s
 
     if (inet_pton(AF_INET, storage_node_address.c_str(), &serv_addr.sin_addr) <= 0)
     {
-        std::cerr << "Invalid address / Address not supported\n";
+        std::cerr << "(cssh) Invalid address / Address not supported\n";
         return false;
     }
 
     if ((sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
     {
-        std::cerr << "Socket creation error\n";
+        std::cerr << "(cssh) Socket creation error\n";
         return false;
     }
 
     if (connect(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0)
     {
-        std::cerr << "Unable to connect to serverID" << std::endl;
+        std::cerr << "(cssh) Unable to connect to serverID" << std::endl;
         return false;
     }
 
-    char* welcome_message_buffer;
+    char *welcome_message_buffer;
     read_until_crlf(sockfd, &welcome_message_buffer); // read the welcome message from the target server
-    std::string welcome_message{welcome_message_buffer};
-    std::string expected_welcome_message = "+OK Server ready";
-    // if (welcome_message != expected_welcome_message) {
-    //     std::cerr << "possible network partition" << std::endl; 
-    //     return false; 
-    // }
+    std::string actual_welcome_message{welcome_message_buffer};
+    std::string expected_welcome_message = "+OK Server ready\r\n";
+
+    std::cerr << "(cssh) actual_welcome_message: " << actual_welcome_message << std::endl;
+
+    if (actual_welcome_message != expected_welcome_message)
+    {
+        std::cerr << "(cssh) possible network partition" << std::endl;
+        return false;
+    }
 
     if (!write_helper(sockfd, message))
     {
-        std::cerr << "unable to write to destination server" << std::endl; 
-        return false; 
+        std::cerr << "(cssh) unable to write to destination server" << std::endl;
+        return false;
     }
 
     char *buffer;
     read_until_crlf(sockfd, &buffer);
     std::string actual_server_response{buffer};
-    std::cout << "actual_server_response: " << actual_server_response << std::endl;
+    std::cerr << "(cssh) actual_server_response from " << storage_node_address << ":" << storage_node_port << ": " << actual_server_response << std::endl;
     close(sockfd);
-    if (expected_server_response == actual_server_response) {
-        return true; 
-    } else {
-        std::cerr << "server response not expected" << std::endl; 
+    if (expected_server_response == actual_server_response)
+    {
+        return true;
+    }
+    else
+    {
+        std::cerr << "(cssh) server response not expected" << std::endl;
         return false;
     }
+}
+
+/// @brief Given a replication group number, return a vector of serverIDs of servers currently still alive
+/// @param group_no
+/// @return a vector of serverIDs still alive
+std::vector<std::string> get_alive_servers(int group_no)
+{
+    std::vector<std::string> res;
+    std::vector<std::string> server_list = tablet_storage_map.at(group_no);
+    for (const std::string &serverID : server_list)
+    {
+        if (server_status_map.at(serverID) && pseudo_killed_nodes.count(serverID) == 0)
+        { // if it's alive
+            res.push_back(serverID);
+        }
+    }
+    return res;
+}
+
+/// @brief Given a replication group number, return a string listing currently alive servers separated by a comma.
+/// @param group_no
+/// @return a string listing currently alive servers separated by a comma. ("serverID1,serverID2,serverID3")
+std::string get_alive_servers_string(int group_no)
+{
+    std::vector<std::string> alive_servers = get_alive_servers(group_no);
+    std::string res;
+    for (const std::string &serverID : alive_servers)
+    {
+        res += serverID + ",";
+    }
+    res = res.substr(0, res.length() - 1);
+    return res;
+}
+
+/// @brief Given a group_no, send "PRIM:<list of active nodes>" to the current primary node of that group
+/// @param group_no
+/// @return true if operation is successful, false otherwise
+bool send_PRIM(int group_no)
+{
+    // get the latest list of active nodes in a group
+    std::string alive_servers_string = get_alive_servers_string(group_no);
+    std::string PRIM_message = "PRIM:1," + alive_servers_string + "\r\n";
+    std::string expected_response = "+OK Primary updated\r\n";
+
+    std::cerr << "send_PRIM here?" << std::endl;
+
+    return create_socket_send_helper(group_primary_map.at(group_no), PRIM_message, expected_response);
+}
+
+void INIT_handler(std::string command, int socket_fd)
+{
+    std::string response = "";
+    std::vector<std::string> command_tokens = split_string(command, ","); // INIT,linhphan -> {INIT, linhphan}
+    if (command_tokens.size() != 2)
+    {
+        response = "-ERR Incorrect command syntax\r\n";
+        write_helper(socket_fd, response);
+        verbose_print_helper_server(socket_fd, response);
+        return;
+    }
+    std::string row_key = command_tokens[1];
+    char first_char = row_key.at(0);
+
+    int group_no = get_group_no_from_char(first_char);
+
+    if (group_no == -1)
+    {
+        response = "-ERR invalid row key\r\n";
+    }
+    else
+    {
+        std::cerr << "did we reach1" << std::endl;
+        std::cerr << "group_no: " << group_no << std::endl;
+        // pthread_mutex_lock(&server_status_map_mutex);
+        if (group_primary_map.at(group_no) == "all_dead")
+        {
+            std::cerr << "did we reach2" << std::endl;
+            response = "-ERR all servers are down at the moment\r\n";
+        }
+        else
+        {
+            std::cerr << "did we reach3" << std::endl;
+            std::cerr << "group_primary_map.at(group_no): " << group_primary_map.at(group_no) << std::endl;
+
+            std::vector<std::string> &tablet_servers_list = tablet_storage_map.at(group_no);
+            std::string server_ID = tablet_servers_list.front();
+            while (!server_status_map.at(server_ID)) // if this server is dead
+            {
+                tablet_servers_list.erase(tablet_storage_map.at(group_no).begin());
+                tablet_servers_list.push_back(server_ID);
+                server_ID = tablet_servers_list.front();
+            }
+            response = "RDIR," + server_ID + "\r\n";
+            // update front of vector
+            tablet_servers_list.erase(tablet_storage_map.at(group_no).begin());
+            tablet_servers_list.push_back(server_ID);
+        }
+    }
+    // pthread_mutex_unlock(&server_status_map_mutex);
+    write_helper(socket_fd, response);
+    verbose_print_helper_server(socket_fd, response);
+}
+
+void STAT_handler(int socket_fd)
+{
+    std::string response = "";
+    response += "+OK,";
+    // pthread_mutex_lock(&server_status_map_mutex);
+    for (const auto &pair : server_status_map)
+    {
+        auto temp = split_string(pair.first, ":");
+        std::string serv_addr_str = temp[0];
+        std::string serv_port_str = temp[1];
+        std::string serv_status_str = std::to_string(pair.second);
+        response += serv_addr_str + ":" + serv_port_str + ":" + serv_status_str + ",";
+    }
+    response += "\r\n";
+    write_helper(socket_fd, response);
+    verbose_print_helper_server(socket_fd, response);
+    // pthread_mutex_unlock(&server_status_map_mutex);
+}
+
+void GTPM_handler(std::string command, int socket_fd)
+{
+    std::string response = "";
+    std::cerr << "here1" << std::endl;
+    std::vector<std::string> command_tokens = split_string(command, ","); // INIT,linhphan -> {INIT, linhphan}
+    if (command_tokens.size() != 2)
+    {
+        response = "-ERR Incorrect command syntax\r\n";
+        write_helper(socket_fd, response);
+        verbose_print_helper_server(socket_fd, response);
+        return;
+    }
+    std::string serverID_to_lookup = command_tokens.at(1);
+    if (serverID_group_map.count(serverID_to_lookup) == 0)
+    {
+        response = "-ERR Invalid server address\r\n";
+        write_helper(socket_fd, response);
+        verbose_print_helper_server(socket_fd, response);
+        return;
+    }
+    std::cerr << "here2" << std::endl;
+    int server_group_no = serverID_group_map.at(serverID_to_lookup);
+    ////
+    if (group_primary_map.at(server_group_no) == "all_dead")
+    {
+        std::cerr << "did we reach2" << std::endl;
+        response = "-ERR all servers are down at the moment\r\n";
+    }
+    else
+    {
+        std::string primaryID = group_primary_map.at(server_group_no);
+        response += "+OK " + primaryID + "\r\n";
+    }
+    ////
+
+    write_helper(socket_fd, response);
+    verbose_print_helper_server(socket_fd, response);
+}
+
+void GTGP_handler(std::string command, int socket_fd)
+{
+    std::string response = "";
+    std::vector<std::string> command_tokens = split_string(command, ","); // INIT,linhphan -> {INIT, linhphan}
+    if (command_tokens.size() != 2)
+    {
+        response = "-ERR Incorrect command syntax\r\n";
+        write_helper(socket_fd, response);
+        verbose_print_helper_server(socket_fd, response);
+        return;
+    }
+    std::string serverID_to_lookup = command_tokens.at(1);
+    if (serverID_group_map.count(serverID_to_lookup) == 0)
+    {
+        response = "-ERR Invalid server address\r\n";
+        write_helper(socket_fd, response);
+        verbose_print_helper_server(socket_fd, response);
+        return;
+    }
+
+    response += "+OK ";
+    int server_group_no = serverID_group_map.at(serverID_to_lookup);
+    std::vector<std::string> server_list = tablet_storage_map.at(server_group_no);
+    for (const std::string &serverID : server_list)
+    {
+        if (server_status_map.at(serverID))
+        { // if it's alive
+            response += serverID + ",";
+        }
+    }
+    response = response.substr(0, response.size() - 1) + "\r\n"; // remove last char (extra ,)
+    write_helper(socket_fd, response);
+    verbose_print_helper_server(socket_fd, response);
+}
+
+void RCVY_handler(std::string command, int socket_fd)
+{
+    std::string response = "";
+    std::vector<std::string> command_tokens = split_string(command, ","); // INIT,linhphan -> {INIT, linhphan}
+    if (command_tokens.size() != 2)
+    {
+        response = "-ERR Incorrect command syntax\r\n";
+        write_helper(socket_fd, response);
+        verbose_print_helper_server(socket_fd, response);
+        return;
+    }
+    std::string serverID_to_mark_as_alive = command_tokens.at(1);
+    if (serverID_group_map.count(serverID_to_mark_as_alive) == 0)
+    {
+        response = "-ERR Invalid server address\r\n";
+        write_helper(socket_fd, response);
+        verbose_print_helper_server(socket_fd, response);
+        return;
+    }
+    // down_servers.erase(command_tokens.at(1));
+    pthread_mutex_lock(&server_status_map_mutex);
+    server_status_map.at(command_tokens.at(1)) = true;
+    int group_no = serverID_group_map.at(serverID_to_mark_as_alive);
+    if (group_primary_map.at(group_no) == "all_dead")
+    { // if all other nodes in the group are dead, the revived node becomes the primary
+        group_primary_map.at(group_no) = serverID_to_mark_as_alive;
+    }
+    auto it = pseudo_killed_nodes.find(serverID_to_mark_as_alive);
+    if (it != pseudo_killed_nodes.end())
+    {
+        pseudo_killed_nodes.erase(it);
+        std::cerr << serverID_to_mark_as_alive << " has been removed from the set." << std::endl;
+    }
+    else
+    {
+        std::cerr << serverID_to_mark_as_alive << " is not found in the set." << std::endl;
+    }
+
+    pthread_mutex_unlock(&server_status_map_mutex);
+    response = "+OK node marked as alive\r\n";
+    write_helper(socket_fd, response);
+    verbose_print_helper_server(socket_fd, response);
+    send_PRIM(group_no);
+}
+
+void KILL_handler(std::string command, int socket_fd)
+{
+    std::string response = "";
+    std::vector<std::string> command_tokens = split_string(command, ","); // INIT,linhphan -> {INIT, linhphan}
+    if (command_tokens.size() != 2)
+    {
+        response = "-ERR Incorrect command syntax\r\n";
+        write_helper(socket_fd, response);
+        verbose_print_helper_server(socket_fd, response);
+        return;
+    }
+    std::string serverID_to_shutdown = command_tokens.at(1);
+    if (serverID_group_map.count(serverID_to_shutdown) == 0)
+    {
+        response = "-ERR Invalid server address\r\n";
+        write_helper(socket_fd, response);
+        verbose_print_helper_server(socket_fd, response);
+        return;
+    }
+    std::string message_to_send = "STDN\r\n";
+    std::string expected_response = "+OK shutting down\r\n";
+    if (create_socket_send_helper(serverID_to_shutdown, message_to_send, expected_response))
+    {
+        pseudo_killed_nodes.insert(serverID_to_shutdown);
+        std::cerr << "(KILL handler) +OK shutting down received" << std::endl;
+        response = "+OK storage server shutdown requested\r\n";
+        std::cerr << "KILL: response: " << response << std::endl;
+        write_helper(socket_fd, response);
+        verbose_print_helper_server(socket_fd, response);
+        update_server_status_map_and_group_primary_map(serverID_to_shutdown);
+    }
+    else
+    {
+        response = "-ERR unable to request storage server shutdown\r\n";
+        std::cerr << "KILL: response: " << response << std::endl;
+        write_helper(socket_fd, response);
+        verbose_print_helper_server(socket_fd, response);
+    }
+}
+
+void RVIV_handler(std::string command, int socket_fd)
+{
+    std::string response = "";
+    std::vector<std::string> command_tokens = split_string(command, ","); // INIT,linhphan -> {INIT, linhphan}
+    if (command_tokens.size() != 2)
+    {
+        response = "-ERR Incorrect command syntax\r\n";
+        write_helper(socket_fd, response);
+        verbose_print_helper_server(socket_fd, response);
+        return;
+    }
+    std::string serverID_to_revive = command_tokens.at(1);
+    if (serverID_group_map.count(serverID_to_revive) == 0)
+    {
+        response = "-ERR Invalid server address\r\n";
+        write_helper(socket_fd, response);
+        verbose_print_helper_server(socket_fd, response);
+        return;
+    }
+    std::string message_to_send = "RSTT\r\n";
+    std::string expected_response = "+OK recovering\r\n";
+    if (create_socket_send_helper(serverID_to_revive, message_to_send, expected_response))
+    {
+        response = "+OK recovery requested\r\n";
+        write_helper(socket_fd, response);
+        verbose_print_helper_server(socket_fd, response);
+        update_server_status_map_and_group_primary_map(serverID_to_revive);
+    }
+    else
+    {
+        response = "-ERR server unable to perform recovery\r\n";
+        write_helper(socket_fd, response);
+        verbose_print_helper_server(socket_fd, response);
+    }
+}
+
+void QUIT_handler(int socket_fd, bool &quit_received)
+{
+    std::string response = "+OK Goodbye!\r\n";
+    write_helper(socket_fd, response);
+    verbose_print_helper_server(socket_fd, response);
+    quit_received = true;
+}
+
+std::vector<std::string> get_list_of_active_secondaries(int group_no)
+{
+    std::vector<std::string> res;
+    for (std::string serverID : tablet_storage_map.at(group_no))
+    {
+        if (serverID != group_primary_map.at(group_no) && server_status_map.at(serverID) && pseudo_killed_nodes.count(serverID) == 0)
+        {
+            res.push_back(serverID);
+        }
+    }
+    return res;
+}
+
+/// @brief Send PRIM:0,current_primary_ID to a secondary node
+/// @param secondary_server_ID
+/// @param current_primary_ID
+/// @return true if successful, false if secondary did not send back expected response
+bool send_PRIM_to_secondary(std::string secondary_server_ID, std::string current_primary_ID)
+{
+    std::string expected_server_response = "+OK Primary updated\r\n";
+    std::string message_to_send = "PRIM:0," + current_primary_ID + "\r\n";
+    std::cout << "(send_PRIM_to_secondary) send to: " << secondary_server_ID << ", message: " << message_to_send << std::endl;
+    if (!create_socket_send_helper(secondary_server_ID, message_to_send, expected_server_response))
+    {
+        return false;
+    }
+    return true;
+}
+
+void print_address_port_from_socketfd(int socket_fd, std::string msg)
+{
+    // Print the IP address and port associated with socket_fd
+    struct sockaddr_in peer_addr;
+    socklen_t addr_len = sizeof(peer_addr);
+    if (getpeername(socket_fd, (struct sockaddr *)&peer_addr, &addr_len) == -1)
+    {
+        perror("getpeername() failed");
+        return;
+    }
+    char ip_str[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &(peer_addr.sin_addr), ip_str, INET_ADDRSTRLEN);
+    int port = ntohs(peer_addr.sin_port);
+
+    std::cerr << "writing msg: " << msg << " to " << ip_str << ":" << port << std::endl;
 }

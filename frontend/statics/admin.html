@@ -5,10 +5,39 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Penn Cloud</title>
+    <style>
+        .modal {
+            display: none;
+            position: fixed;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            width: 300px;
+            padding: 20px;
+            background-color: #fefefe;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+        }
+
+        .modal-content {
+            background-color: #fefefe;
+            margin: auto;
+            padding: 20px;
+            border: 1px solid #888;
+            width: 80%;
+        }
+    </style>
 </head>
 
 <body>
     <div class="container">
+        <!-- Modal -->
+        <div id="modal" class="modal">
+            <div class="modal-content">
+                <p>Modal text</p>
+                <button id="closeModalBtn">Close</button>
+            </div>
+
+        </div>
         <h1>Admin Console</h1>
 
         <h2>Servers</h2>
@@ -43,10 +72,23 @@
             -->
         </table>
         <h2>Web Storage Data</h2>
-
+        <h3>Replication Group 1</h3>
+        <ul id="key-value-list-1">
+            <!-- kv pairs-->
+        </ul>
+        <h3>Replication Group 2</h3>
+        <ul id="key-value-list-2">
+            <!-- kv pairs-->
+        </ul>
+        <h3>Replication Group 3</h3>
+        <ul id="key-value-list-3">
+            <!-- kv pairs-->
+        </ul>
+        <h4 id="bytes-header"></h4>
+        <p id="bytes"></p>
     </div>
     <script>
-        // const server list will be added here with c++ code
+        // server list will be added here with c++ code
         // EXAMPLE:
         // const backend_servers = [
         //     { server_address: "127.0.0.1:20011", status: "Alive"},
@@ -59,15 +101,65 @@
         //     { server_address: "127.0.0.1:8081", status: "Alive", num_connections: 2},
         //     { server_address: "127.0.0.1:8082", status: "Alive", num_connections: 3},
         // ];
+
+        // const kv_pairs_1 = [
+        //     { rowkey: "key1", columnkey: "column1" },
+        //     { rowkey: "key2", columnkey: "column2" },
+        // ];
+
+        // const kv_pairs_2 = [
+        //     { rowkey: "key1", columnkey: "column1" },
+        //     { rowkey: "key2", columnkey: "column2" },
+        // ];
+
+        // const kv_pairs_3 = [
+        //     { rowkey: "key1", columnkey: "column1" },
+        //     { rowkey: "key2", columnkey: "column2" },
+        // ];
+
+        function displayBytes(rowkey, columnkey) {
+            console.log('Getting bytes for ' + rowkey + "," + columnkey);
+            const bodyData = "rowkey=" + rowkey + "&columnkey=" + columnkey + "&";
+            const options = {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'text/plain'
+                },
+                body: bodyData
+            };
+
+            fetch('/get_kvs_data', options)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Was unable to get key value data for ' + rowkey + "," + columnkey);
+                    }
+                    return response;
+                })
+                .then(data => {
+                    console.log('POST request successful', data);
+                    return data.text();
+                })
+                .then(text => {
+                    console.log('Bytes for ' + rowkey + "," + columnkey, text);
+                    document.getElementById('bytes').innerText = text;
+                    document.getElementById('bytes-header').innerText = 'Bytes for ' + rowkey + "," + columnkey;
+                })
+                .catch(error => {
+                    console.error('There was a problem with the POST request:', error);
+                    alert(error);
+                });
+        }
+
         function displayServers() {
+            // Write in server information
             const backendTable = document.getElementById('backendTable');
             backend_servers.forEach(server => {
                 const row = document.createElement('tr');
                 row.innerHTML = `
                 <td>${server.server_address}</td>
                 <td>${server.status}</td>
-                <td><button>Kill</button></td>
-                <td><button>Restart</button></td>
+                <td><button class="kill-button">Kill</button></td>
+                <td><button class="restart-button">Restart</button></td>
             `;
                 backendTable.appendChild(row);
             });
@@ -82,6 +174,148 @@
             `;
                 frontendTable.appendChild(row);
             });
+
+            // Add event listeners to buttons
+            const killButtons = document.getElementsByClassName('kill-button');
+            for (let i = 0; i < killButtons.length; i++) {
+                killButtons[i].addEventListener('click', () => {
+                    const server_id = event.target.parentNode.parentNode.querySelector('td:first-child').textContent;
+                    console.log('Killing server' + server_id);
+                    const bodyData = "server_id=" + server_id + "&";
+                    const options = {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'text/plain'
+                        },
+                        body: bodyData
+                    };
+
+                    fetch('/kill-server', options)
+                        .then(response => {
+                            if (!response.ok) {
+                                throw new Error('Master backend was unable to kill server.');
+                            }
+                            return response;
+                        })
+                        .then(data => {
+                            console.log('POST request successful', data);
+                            document.getElementById('modal').innerText = "Kill successful!\nClick to close.";
+                            document.getElementById("modal").style.display = "block";
+                        })
+                        .catch(error => {
+                            console.error('There was a problem with the POST request:', error);
+                            alert('Error in killing server. Please try again.');
+                        });
+
+                });
+            }
+
+            const restartButtons = document.getElementsByClassName('restart-button');
+            for (let i = 0; i < restartButtons.length; i++) {
+                restartButtons[i].addEventListener('click', () => {
+                    const server_id = event.target.parentNode.parentNode.querySelector('td:first-child').textContent;
+                    console.log('Restarting server' + server_id);
+                    const bodyData = "server_id=" + server_id + "&";
+                    const options = {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'text/plain'
+                        },
+                        body: bodyData
+                    };
+
+                    fetch('/restart-server', options)
+                        .then(response => {
+                            if (!response.ok) {
+                                throw new Error('Master backend was unable to restart server.');
+                            }
+                            return response;
+                        })
+                        .then(data => {
+                            console.log('POST request successful', data);
+                            document.getElementById('modal').innerText = "Restart successful!\nClick to close.";
+                            document.getElementById("modal").style.display = "block";
+                        })
+                        .catch(error => {
+                            console.error('There was a problem with the POST request:', error);
+                            alert('Error in restarting server. Please try again.');
+                        });
+
+                });
+            }
+
+            // Write in key value pairs for each replication group
+            const kv_pairs_ele_1 = document.getElementById('key-value-list-1');
+            const kv_pairs_ele_2 = document.getElementById('key-value-list-2');
+            const kv_pairs_ele_3 = document.getElementById('key-value-list-3');
+
+            kv_pairs_1.forEach(kv_pair => {
+                const listItem = document.createElement('li');
+                const button = document.createElement('button');
+
+                button.setAttribute('data-rowkey', kv_pair.rowkey);
+                button.setAttribute('data-columnkey', kv_pair.columnkey);
+
+                button.className = 'bytes-button';
+                button.textContent = `${kv_pair.rowkey}, ${kv_pair.columnkey}`;
+
+                button.addEventListener('click', function () {
+                    const rowkey = this.getAttribute('data-rowkey');
+                    const columnkey = this.getAttribute('data-columnkey');
+                    displayBytes(rowkey, columnkey);
+                });
+
+                listItem.appendChild(button);
+                kv_pairs_ele_1.appendChild(listItem);
+            });
+
+            kv_pairs_2.forEach(kv_pair => {
+                const listItem = document.createElement('li');
+                const button = document.createElement('button');
+
+                button.setAttribute('data-rowkey', kv_pair.rowkey);
+                button.setAttribute('data-columnkey', kv_pair.columnkey);
+
+                button.className = 'bytes-button';
+                button.textContent = `${kv_pair.rowkey}, ${kv_pair.columnkey}`;
+
+                button.addEventListener('click', function () {
+                    const rowkey = this.getAttribute('data-rowkey');
+                    const columnkey = this.getAttribute('data-columnkey');
+                    displayBytes(rowkey, columnkey);
+                });
+
+                listItem.appendChild(button);
+                kv_pairs_ele_2.appendChild(listItem);
+            });
+
+            kv_pairs_3.forEach(kv_pair => {
+                const listItem = document.createElement('li');
+                const button = document.createElement('button');
+
+                button.setAttribute('data-rowkey', kv_pair.rowkey);
+                button.setAttribute('data-columnkey', kv_pair.columnkey);
+
+                button.className = 'bytes-button';
+                button.textContent = `${kv_pair.rowkey}, ${kv_pair.columnkey}`;
+
+                button.addEventListener('click', function () {
+                    const rowkey = this.getAttribute('data-rowkey');
+                    const columnkey = this.getAttribute('data-columnkey');
+                    displayBytes(rowkey, columnkey);
+                });
+
+                listItem.appendChild(button);
+                kv_pairs_ele_3.appendChild(listItem);
+            });
+
+
+            var modal = document.getElementById("modal");
+            window.onclick = function (event) {
+                if (event.target == modal) {
+                    window.location.href = "/admin";
+                }
+            }
         }
 
         window.onload = displayServers;

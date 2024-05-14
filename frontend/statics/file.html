@@ -4,63 +4,71 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Penn Cloud</title>
+    <style>
+      .option-container {
+        display: flex;
+        gap: 5px;
+        margin-left: auto;
+        margin-right: auto;
+      }
+      .container {
+        text-align: center;
+        outline: 1px solid black;
+        padding: 30px;
+        border-radius: 5px;
+      }
+      .file-container {
+        text-align: center;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+    </style>
 </head>
 <body>
     <div class="file-container">
         <!-- Insert file name here using c++ code-->
-        <button id="delete-btn">Delete</button>
-        <button id="download-btn">Download</button>
+        <div class="option-container">
+          <div class="container">
+            <form action="/rename" id="rename-form" method="post">
+              <label for="name">New Name: </label>
+              <input type="text" id="name" name="name" required>
+              <br><br>
+              <input type="submit" value="Rename">
+            </form>
+          </div>
+          <div class="container">
+            <form action="/move" id="move-form" method="post">
+              <label for="dest">Move to Folder: </label>
+              <input type="text" id="dest" name="dest" required>
+              <br><br>
+              <input type="submit" value="Move">
+            </form>
+          </div>
+        </div>
+        <form action="/delete" id="delete-form" method="post">
+          <input type="submit" value="Delete">
+        </form>
+        <form action="/download" id="download-form" method="post">
+          <input type="submit" value="Download">
+        </form>
     </div>
 
     <script>
-        document.getElementById('delete-btn').addEventListener('click', function() {
-            const currentURL = window.location.href;
-            const lastIndex = currentURL.lastIndexOf('/');
-            const stringAfterLastSlash = currentURL.substring(lastIndex + 1);
-            const bodyData = "file_id=" + stringAfterLastSlash + "&";
-            const options = {
-                method: 'POST',
-                headers: {
-                'Content-Type': 'text/plain'
-                },
-                body: bodyData
-            };
-
-            fetch('/delete-file', options)
-                .then(response => {
-                if (!response.ok) {
-                    throw new Error('Response was not ok');
-                }
-                return response;
-                })
-                .then(data => {
-                console.log('POST request successful', data);
-                // Handle the response data here
-                })
-                .catch(error => {
-                console.error('There was a problem with the POST request:', error);
-                // Handle errors here
-                });
-        });
-
-        document.getElementById('download-btn').addEventListener('click', function() {
+        function onLoad() {
           const currentURL = document.URL;
           const index = currentURL.search("file");
           let filePath = currentURL.substring(index + 4);
-          fetch(`/download${filePath}`)
-            .then(response => {
-              if (!response.ok) {
-                throw new Error('Response was not ok');
-              }
-              return response; 
-            }).then(data => {
-              console.log('GET request successful', data);
-            })
-            .catch(error => {
-              console.error('There was a problem with the GET request:', error);
-            })
-            // TODO: Implement download
-        });
+          let form = document.getElementById('download-form');
+          form.setAttribute('action', `/download${filePath}`);
+          form = document.getElementById('delete-form');
+          form.setAttribute('action', `/delete${filePath}`);
+          form = document.getElementById('rename-form');
+          form.setAttribute('action', `/rename${filePath}`);
+          form = document.getElementById('move-form');
+          form.setAttribute('action', `/move${filePath}`);
+        }
+        window.onload = onLoad;
     </script>
 </body>
 </html>
