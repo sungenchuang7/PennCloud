@@ -32,13 +32,21 @@ First, the working directory needs to be `root/backend/` (type `cd ./../backend/
 
 Now, open 9 Terminal tabs. 
 In the 1st tab, run `./backendserver -c config.txt -i 1`.
+
 In the 2nd tab, run `./backendserver -c config.txt -i 2`.
+
 In the 3rd tab, run `./backendserver -c config.txt -i 3`.
+
 In the 4th tab, run `./backendserver -c config.txt -i 4`.
+
 In the 5th tab, run `./backendserver -c config.txt -i 5`.
+
 In the 6th tab, run `./backendserver -c config.txt -i 6`.
+
 In the 7th tab, run `./backendserver -c config.txt -i 7`.
+
 In the 8th tab, run `./backendserver -c config.txt -i 8`.
+
 In the 9th tab, run `./backendserver -c config.txt -i 9`.
 
 Here, `-i`'s argument refers to the storage node numberm and `-c`'s the config file's path. 
