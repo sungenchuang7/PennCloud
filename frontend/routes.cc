@@ -30,7 +30,6 @@
 
 std::string STATICS_LOC = "./statics/";
 int MAX_BUFF_SIZE = 1000;
-// TODO: Implement address caching (map of rowkey to backend address)
 static std::map<std::string, std::string> usernames;
 std::string MASTER_SERVER_ADDR = "127.0.0.1";
 int MASTER_SERVER_PORT = 20000;
@@ -1412,7 +1411,6 @@ std::tuple<std::string, std::string, std::string> get_admin(ReqInitLine *req_ini
   backend_server_script += "];\n";
   message_body.insert(insert_index + insert_tag.length(), backend_server_script);
 
-  // TODO: Get statuses of frontend servers
   std::vector<std::tuple<std::string, std::string, std::string>> frontend_servers = get_frontend_servers_status();
   std::string frontend_server_script = "\nconst frontend_servers = [\n";
   for (auto const &server : frontend_servers)
@@ -1959,18 +1957,6 @@ std::tuple<std::string, std::string, std::string> post_delete_message(ReqInitLin
   return std::make_tuple(init_response, headers, message_body);
 }
 
-// Reply to a message (uses post send)
-std::tuple<std::string, std::string, std::string> post_reply_message(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body)
-{
-  return std::make_tuple("", "", "");
-}
-
-// Forward a message (uses post send)
-std::tuple<std::string, std::string, std::string> post_forward_message(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body)
-{
-  return std::make_tuple("", "", "");
-}
-
 std::tuple<std::string, std::string, std::string> post_change_password(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body)
 {
   // Parse body for username and password
@@ -2208,7 +2194,9 @@ std::tuple<std::string, std::string, std::string> get_kvs_data(ReqInitLine *req_
 }
 
 // File system functions
-// Get
+// GET
+
+// function to return and display all children of a folder specified in request path
 std::tuple<std::string, std::string, std::string> get_storage(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers)
 {
   // Check if user is logged in (auth_token=sid)
@@ -2417,6 +2405,7 @@ std::tuple<std::string, std::string, std::string> get_storage(ReqInitLine *req_i
   return std::make_tuple(init_response, headers, message_body);
 }
 
+// function to display file options for file specified in path
 std::tuple<std::string, std::string, std::string> get_file(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers)
 {
   // Check if user is logged in (auth_token=sid)
@@ -2438,8 +2427,6 @@ std::tuple<std::string, std::string, std::string> get_file(ReqInitLine *req_init
     headers += "Content-Length: " + std::to_string(message_body.length()) + "\r\n";
     return std::make_tuple(init_response, headers, message_body);
   }
-
-  // Get message_id from path
 
   // Get user sid cookie value
   std::string sid = cookies["sid"];
@@ -2497,6 +2484,7 @@ std::tuple<std::string, std::string, std::string> get_file(ReqInitLine *req_init
   return std::make_tuple(init_response, headers, message_body);
 }
 
+// function to upload file
 std::tuple<std::string, std::string, std::string> post_file(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body)
 {
   // Check if user is logged in (auth_token=sid)
@@ -2677,6 +2665,7 @@ std::tuple<std::string, std::string, std::string> post_file(ReqInitLine *req_ini
   return std::make_tuple(init_response, headers, message_body);
 }
 
+// function to retrieve and download file data
 std::tuple<std::string, std::string, std::string> download_file(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers)
 {
   // Check if user is logged in (auth_token=sid)
@@ -2776,8 +2765,6 @@ std::tuple<std::string, std::string, std::string> download_file(ReqInitLine *req
   std::string next_header = file_data.substr(0, split_ind);
   std::string data = file_data.substr(split_ind + 4);
   // get rid of any extra \r\n's
-  // int cut_ind = data.find("\r\n");
-  // data = data.substr(0, cut_ind);
   data.pop_back();
   data.pop_back();
 
@@ -2790,6 +2777,8 @@ std::tuple<std::string, std::string, std::string> download_file(ReqInitLine *req
   return std::make_tuple(init_response, headers, message_body);
 }
 
+
+// function to create new folder
 std::tuple<std::string, std::string, std::string> post_folder(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body)
 {
   // Check if user is logged in (auth_token=sid)
@@ -2813,7 +2802,6 @@ std::tuple<std::string, std::string, std::string> post_folder(ReqInitLine *req_i
   }
 
   // parse request for folder data
-
   std::unordered_map<std::string, std::string> body_map = parse_post_body_url_encoded(body);
   // get the folder name
   std::string folder_name = body_map["name"];
@@ -2923,6 +2911,8 @@ std::tuple<std::string, std::string, std::string> post_folder(ReqInitLine *req_i
   return std::make_tuple(init_response, headers, message_body);
 }
 
+
+// function to delete file or folder
 std::tuple<std::string, std::string, std::string> delete_file(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body)
 {
   // Check if user is logged in (auth_token=sid)
@@ -3105,6 +3095,7 @@ std::tuple<std::string, std::string, std::string> delete_file(ReqInitLine *req_i
   return std::make_tuple(init_response, headers, message_body);
 }
 
+// function to rename file or folder
 std::tuple<std::string, std::string, std::string> rename_file(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body)
 {
   // Check if user is logged in (auth_token=sid)
@@ -3256,6 +3247,7 @@ std::tuple<std::string, std::string, std::string> rename_file(ReqInitLine *req_i
   return std::make_tuple(init_response, headers, message_body);
 }
 
+// function to move file or folder to new path specified in body
 std::tuple<std::string, std::string, std::string> move_file(ReqInitLine *req_init_line, std::unordered_map<std::string, std::string> req_headers, std::string body)
 {
   // Check if user is logged in (auth_token=sid)

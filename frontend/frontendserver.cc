@@ -122,12 +122,13 @@ void send_response(int fd, int thread_no, std::string init_response, std::string
   }
 }
 
+// thread to tell load balancer server is alive
 void *heartbeat_thread(void *args)
 {
   bool sig_int = false;
   int comm_fd = *(int *)args;
   // first message has to tell the address information for clients to connect to
-  std::string addr = "127.0.0.1:" + std::to_string(port) + "\r\n"; // TODO: change to look at debug later
+  std::string addr = "127.0.0.1:" + std::to_string(port) + "\r\n";
   write(comm_fd, addr.c_str(), strlen(addr.c_str()));
 
   if (shutting_down)
@@ -140,6 +141,7 @@ void *heartbeat_thread(void *args)
     pthread_exit(NULL);
   }
 
+  // write to load balancer every 3 seconds
   while (!sig_int)
   {
     sleep(3); // sleep for 3 seconds
@@ -570,7 +572,7 @@ int main(int argc, char *argv[])
   bzero(&lbservaddr, sizeof(lbservaddr));
   lbservaddr.sin_family = AF_INET;
   lbservaddr.sin_port = htons(5000);
-  std::string lbip = "127.0.0.1"; // TODO: Change to config file later
+  std::string lbip = "127.0.0.1";
   inet_pton(AF_INET, lbip.c_str(), &(lbservaddr.sin_addr));
   connect(lbfd, (struct sockaddr *)&lbservaddr, sizeof(lbservaddr));
 
@@ -607,7 +609,7 @@ int main(int argc, char *argv[])
   struct sockaddr_in servaddr;
   bzero(&servaddr, sizeof(servaddr));
   servaddr.sin_family = AF_INET;
-  std::string ip = "127.0.0.1"; // TODO: Change to config file later
+  std::string ip = "127.0.0.1";
   inet_pton(AF_INET, ip.c_str(), &servaddr.sin_addr);
 
   servaddr.sin_port = htons(port);
