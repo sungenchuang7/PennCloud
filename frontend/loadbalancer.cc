@@ -95,7 +95,7 @@ void *frontendThread(void *args)
       }
     }
 
-    // TODO: check if the message is a request for stat on frontend servers
+    // if the message from the frontend server is "STAT", return the information about live servers
     if (strncmp(read_buffer, "STAT", 4) == 0)
     {
 
@@ -106,6 +106,7 @@ void *frontendThread(void *args)
       std::map<std::string, std::string>::iterator real_server_address_it;
       for (real_server_address_it = real_server_address.begin(); real_server_address_it != real_server_address.end(); real_server_address_it++)
       {
+        // check if each server is alive and return num of clients
         if (real_server_address_it->second == "127.0.0.1:8080")
         {
           response_8080 += "Alive,";
@@ -125,6 +126,7 @@ void *frontendThread(void *args)
         }
       }
 
+      // if string hasn't been updated, server is dead
       if (response_8080 == "127.0.0.1:8080,")
       {
         response_8080 += "Down,0";
