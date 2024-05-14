@@ -330,7 +330,6 @@ void connectionManager() {
 void* workerThread(void* connectionInfo) {
     std::vector<char> buf;
     char targetTablet;
-    // char recoveringTablet = '0';  // The tablet currently undergoing recovery.
     int comm_FD = static_cast<threadDetails*>(connectionInfo)->connectionFD;
     int numRead = 0;  // The number of bytes returned by read().
     int numWrite = 0; // The number of bytes written by write();
@@ -342,7 +341,6 @@ void* workerThread(void* connectionInfo) {
     bool rwLockPickedUp = false;
     bool writeReceived = false;  // Tracks when we are processing a write from primary.
     bool pwrtReceived = false;  // Tracks when the primary is accepting data to be propogated.
-    // bool logOrCheckpoint = false;  // Tracks whether or not the incoming data is for a checkpoint log or checkpoint file.
     std::string requestedCommand = "Default";  // The client's most recently requested command.
     std::string requestedRow = "";
     std::string requestedColumn = "";
@@ -502,7 +500,6 @@ void* workerThread(void* connectionInfo) {
                         fprintf(stderr, "DATA failed to write: %s\n", strerror(errno));
                     }
                 } else if (recoveryMode == true && logOrCheckpoint == true) {
-
                     // Write data to checkpoint file.
                     saveCheckpointFile(recoveringTablet, valueData);
                     delete valueData;
@@ -938,7 +935,7 @@ void* workerThread(void* connectionInfo) {
 
                                 // Pick up locks for write request and swap tablet if necessary.
                                 pthread_mutex_lock(&activeTabletLock);
-                                readWriteLock.lock_shared();
+                                readWriteLock.lock();
                                 rwLockPickedUp = true;
                                 if (activeTablet != targetTablet) {
                                     importTablet(targetTablet);
@@ -1254,12 +1251,12 @@ void* workerThread(void* connectionInfo) {
 
                                 pseudoShutDown = true;
                                 currentPrimary = false;
+                                primaryAddress = "";
                                 activeTablet = '0';
 
                                 // Deallocate KVS memory to simulate shutdown.
                                 kvsCleanup();
 
-                                // std::cerr << "STDN command received. Pseudo shutdown enabled." << std::endl;
                                 fprintf(stderr,"[Storage Server: %s] Has died - waiting for recovery signal from master server", ipPorts[myIndex].c_str());
 
                                 if (write(comm_FD, stdnResponse.c_str(), stdnResponse.length()) < 0) {
@@ -1306,7 +1303,9 @@ void* workerThread(void* connectionInfo) {
                                     break;
                                 }
 
-                                pthread_mutex_lock(&activeTabletLock);
+                                // Pick up shared lock to allow other threads to read during recovery.
+                                readWriteLock.lock_shared();
+
                                 // Parse the arguments.
                                 std::string updtArgument = "";
                                 std::string nextValue = "";
@@ -1320,9 +1319,6 @@ void* workerThread(void* connectionInfo) {
 
                                 while (!ss.eof()) {
                                     std::getline(ss, nextValue, ':');
-                                    // if (nextValue[nextValue.length() - 1] == '\n') {
-                                    // nextValue = nextValue.substr(0, nextValue.length() - 1);
-                                    // }
                                     updtArgs.push_back(nextValue);
                                 }
 
@@ -1351,8 +1347,6 @@ void* workerThread(void* connectionInfo) {
                                             break;
                                         }
                                     }
-                                } else {
-                                    // All logs are empty.
                                 }
 
                                 for (auto tab : recordCounts) {
@@ -1377,9 +1371,7 @@ void* workerThread(void* connectionInfo) {
                                 }
 
                                 // Release locks.
-                                pthread_mutex_unlock(&activeTabletLock);
-
-                                // Reset any state values.
+                                readWriteLock.unlock_shared();
                             } else if ((buf[0] == 'f' || buf[0] == 'F') && 
                                     (buf[1] == 'i' || buf[1] == 'I') && 
                                     (buf[2] == 'l' || buf[2] == 'L') &&
@@ -1544,7 +1536,7 @@ void logActivity(int seqNum, char tablet, std::string action, std::string row, s
                         row + ':' + 
                         column + ':' + 
                         length + '\n' + 
-                        value;
+                        value + '\n';
     } else if (action == "DELE") {
         currentRecord = std::to_string(seqNum) + ':' +
                         action + ':' + 
@@ -1626,7 +1618,6 @@ void checkpointUpdate() {
 
 void* diskUpdatesThread(void* threadInfo) {
     while (true) {
-        sleep(1);
         if (pseudoShutDown == true) {
             // Server shut down received from admin console. Continue until recovery concludes.
             continue;
@@ -1663,7 +1654,7 @@ void* diskUpdatesThread(void* threadInfo) {
         }
 
         // Periodically wait before performing the next checkpoint update.
-        sleep(1);
+        sleep(5);
 
         if (serverShutDown == true) {
             // CTRL+C requested.
@@ -1681,9 +1672,6 @@ void importTablet(char tablet) {
     char lastTablet = activeTablet;
 
     if (lastTablet != '0') {
-        // // Pick up lock for the last tablet.
-        // kvsTabletLocks[lastTablet - 'a'].lock();
-
         // Perform checkpointing on last tablet.
         checkpointUpdate();
 
@@ -1922,6 +1910,10 @@ std::string requestPrimary() {
 
     // Update primary for this node.
     primaryAddress = primary;
+
+    if (primaryAddress == ipPorts[myIndex]) {
+        currentPrimary = true;
+    }
 
     return primary;
 }
@@ -2469,14 +2461,27 @@ void recovery() {
 
         // Load the most recent log that was not checkpointed.
         std::vector<char> mostRecentLog = loadLogFile();
-        
+
+        if (mostRecentLog.size() > 0) {
+            // Execute the log file's actions in KVS.
+            logFileRecovery(mostRecentLog);
+        }
+
         // Send recovery request to primary.
         requestData(activePrimary, argument);
     } else {
         fprintf(stderr, "[Recovering Node: %s] No nodes currently active - independent recovery initiated\n", ipPorts[myIndex].c_str());
+
+        // Load the most recent log that was not checkpointed.
+        std::vector<char> mostRecentLog = loadLogFile();
+
+        if (mostRecentLog.size() > 0) {
+            // Execute the log file's actions in KVS.
+            logFileRecovery(mostRecentLog);
+        }
     }
 
-    // Notify master.
+    // Notify master that recovery is complete.
     recoveryComplete();
 
     // Reset state.
@@ -2654,7 +2659,7 @@ void saveLogFile(char tablet, std::string* data) {
     tablet = std::tolower(tablet);
     
     // Open and lock file.
-    directory = directory + '/' + "storage_node_" + std::to_string(myIndex) + "/activity_logs/" + "tablet_" + tablet;
+    directory = directory + '/' + "storage_node_" + std::to_string(myIndex) + "/activity_logs/" + "tablet_log_" + tablet;
     currentFD = open(directory.data(), O_RDWR | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
     flock(currentFD, LOCK_EX);
 
@@ -2690,12 +2695,100 @@ void saveCheckpointFile(char tablet, std::string* data) {
     close(currentFD);
 }
 
-void logFileRecovery() {
+void logFileRecovery(std::vector<char> logFile) {
+    std::string row = "";
+    std::string column = "";
+    std::string action = "";
+    std::string length = "";
+    std::string currentSequenceNumber = "";
+    std::vector<std::string> parsedValues;
+    std::string currentLine;
+    bool valueParsing = false;  // Keeps track of whether we are extracting an action or a value.
+    bool tabletImported = false;
+    int indexTracker = 0;
 
+    // Separate data into lines.
+    for (int i = 0; i < logFile.size(); i++) {
+        currentLine.push_back(logFile[i]);
+
+        if (logFile[i] == '\n') {
+            parsedValues.push_back(currentLine);
+            currentLine = "";
+        }
+    }
+
+    // Add data to KVS.
+    for (int i = 0; i < parsedValues.size(); i++) {
+        if (valueParsing == false) {
+            // Get and parse the next record label.
+            currentLine = parsedValues[i];
+
+            row = "";
+            column = "";
+            action = "";
+            length = "";
+            currentSequenceNumber = "";
+
+            for (int j = 0; j < currentLine.size(); j++) {
+                if (currentLine[j] == ':') {
+                    indexTracker++;
+                } else if (indexTracker == 0) {
+                    currentSequenceNumber += currentLine[j];
+                } else if (indexTracker == 1) {
+                    action += currentLine[j];
+                } else if (indexTracker == 2) {
+                    row += currentLine[j];
+                } else if (indexTracker == 3) {
+                    column += currentLine[j];
+                } else if (indexTracker == 4) {
+                    length += currentLine[j];
+                }
+            }
+
+            if (tabletImported == false) {
+                tabletImported = true;
+                importTablet(std::tolower(row[0]));
+            }
+
+            if (action == "DELE") {
+                column = column.substr(0, column.size() - 1);
+
+                if (keyValueStore[row][column] != nullptr) {
+                    delete keyValueStore[row][column];
+                    keyValueStore[row].erase(column);
+                }
+            } else {
+                valueParsing = true;
+                length = length.substr(0, length.size() - 1);
+            }
+
+            indexTracker = 0;
+            currentLine = "";
+        } else {
+            for (int j = 0; j < parsedValues[i].size(); j++) {
+                if (currentLine.size() < std::stoi(length)) {
+                    currentLine.push_back(parsedValues[i][j]);
+                } else {
+                    break;
+                }
+            }
+
+            // Check if full value has been extracted.
+            if (currentLine.size() == std::stoi(length)) {
+                std::string* valueData = new std::string(currentLine);
+                if (keyValueStore[row][column] != nullptr) {
+                    delete keyValueStore[row][column];
+                }
+
+                keyValueStore[row][column] = valueData;
+                currentLine = "";
+                valueParsing = false;
+            }
+        }
+    }
 }
 
 void sendLogFileData(std::string node, std::vector<char>& data, char tablet) {
-    // std::string primary = ipPorts[primaryIndex];
     int openFD;
     int numRead;
     int status;
@@ -3185,6 +3278,7 @@ void recoveryComplete() {
 
     // Send command to server.
     write(openFD, &command[0], command.length());
+
     // Get response from server.
     while (true) {
         numRead = read(openFD, tempBuf.data(), 2000);
