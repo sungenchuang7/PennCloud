@@ -28,7 +28,7 @@ These frontend servers will each connect to the load balancer, and occasionally 
 In order to connect to the frontend, a user should connect to localhost:8000. The load balancer will then automatically redirect the user to the relevant frontend server. It's imperative that all frontend servers are connected to the load balancer before any users attempt to connect. 
 
 # To launch backend servers: 
-First, the working directory needs to be `root/backend/` (type `cd ./../backend/` if coming from the previous step). Compile all the source code by typing `make`. 
+First, the working directory needs to be `root/backend/` (type `cd ./../backend/` if coming from the previous step). Compile all the source code by typing `make all`. 
 
 Now, open 9 Terminal tabs. 
 In the 1st tab, run `./backendserver -c config.txt -i 1`.
@@ -49,12 +49,12 @@ In the 8th tab, run `./backendserver -c config.txt -i 8`.
 
 In the 9th tab, run `./backendserver -c config.txt -i 9`.
 
-Here, `-i`'s argument refers to the storage node numberm and `-c`'s the config file's path. 
+Here, `-i`'s argument refers to the storage node number and `-c`'s argument refers to the config file's path. 
 
 Now open another tab. 
 In the tab, run `./masterbackendserver -d -v config.txt`. 
 
-To clear the memory on disk for storage node #1, navigate to backend/storage_node_1/activity_logs and remove each "tablet_log_" .txt file. Next, navigate to backend/storage_node_1/tablets and remove each "tablet_" .txt file. This information is also stored in a README file in each directory.
+To clear the memory on disk for storage node #1, navigate to backend/storage_node_1/activity_logs and remove each "tablet_log_" and "sequence_number_" file. Next, navigate to backend/storage_node_1/tablets and remove each "tablet_" file. This information is also stored in a README file in each directory.
 
 # To launch SMTP server/client:
 `./smtpserver -v` runs the server to receive emails from outside penn cloud system but still running on same host machine (ie Thunderbird)
